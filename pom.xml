@@ -26,7 +26,7 @@
   <groupId>io.netty</groupId>
   <artifactId>netty-parent</artifactId>
   <packaging>pom</packaging>
-  <version>4.0.33.Final</version>
+  <version>4.0.33.dse</version>
 
   <name>Netty</name>
   <url>http://netty.io/</url>
@@ -50,10 +50,10 @@
   <inceptionYear>2008</inceptionYear>
 
   <scm>
-    <url>https://github.com/netty/netty</url>
-    <connection>scm:git:git://github.com/netty/netty.git</connection>
-    <developerConnection>scm:git:ssh://git@github.com/netty/netty.git</developerConnection>
-    <tag>netty-4.0.33.Final</tag>
+    <url>https://github.com/riptano/netty</url>
+    <connection>scm:git:git://github.com/riptano/netty.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/riptano/netty.git</developerConnection>
+    <tag>netty-4.0.33.dse</tag>
   </scm>
 
   <developers>
