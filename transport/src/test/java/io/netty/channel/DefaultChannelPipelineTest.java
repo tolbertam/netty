@@ -870,6 +870,20 @@ public class DefaultChannelPipelineTest {
         assertTrue(handler2.removedHandler.get());
     }
 
+    @Test
+    public void testNullName() {
+        ChannelPipeline pipeline = new LocalChannel().pipeline();
+        pipeline.addLast(newHandler());
+        pipeline.addLast(null, newHandler());
+        pipeline.addFirst(newHandler());
+        pipeline.addFirst(null, newHandler());
+
+        pipeline.addLast("test", newHandler());
+        pipeline.addAfter("test", null, newHandler());
+
+        pipeline.addBefore("test", null, newHandler());
+    }
+
     private static final class CallbackCheckHandler extends ChannelHandlerAdapter {
         final AtomicBoolean addedHandler = new AtomicBoolean();
         final AtomicBoolean removedHandler = new AtomicBoolean();
