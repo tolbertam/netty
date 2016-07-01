@@ -57,7 +57,7 @@ abstract class AbstractChannelHandlerContext extends DefaultAttributeMap impleme
     // child executor.
     final EventExecutor executor;
     private ChannelFuture succeededFuture;
-    private int handlerState = INIT;
+    private volatile int handlerState = INIT;
 
     // Lazily instantiated tasks used to trigger events to a handler with different executor.
     // There is no need to make this volatile as at worse it will just create a few more instances then needed.
