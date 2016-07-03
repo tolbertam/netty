@@ -143,12 +143,14 @@ public class DefaultChannelPipeline implements ChannelPipeline {
             // In this case we add the context to the pipeline and add a task that will call
             // ChannelHandler.handlerAdded(...) once the channel is registered.
             if (!registered) {
+                newCtx.setBeforeAdded();
                 callHandlerCallbackLater(newCtx, true);
                 return this;
             }
 
             EventExecutor executor = newCtx.executor();
             if (!executor.inEventLoop()) {
+                newCtx.setBeforeAdded();
                 executor.execute(new Runnable() {
                     @Override
                     public void run() {
@@ -189,12 +191,14 @@ public class DefaultChannelPipeline implements ChannelPipeline {
             // In this case we add the context to the pipeline and add a task that will call
             // ChannelHandler.handlerAdded(...) once the channel is registered.
             if (!registered) {
+                newCtx.setBeforeAdded();
                 callHandlerCallbackLater(newCtx, true);
                 return this;
             }
 
             EventExecutor executor = newCtx.executor();
             if (!executor.inEventLoop()) {
+                newCtx.setBeforeAdded();
                 executor.execute(new Runnable() {
                     @Override
                     public void run() {
@@ -239,12 +243,14 @@ public class DefaultChannelPipeline implements ChannelPipeline {
             // In this case we add the context to the pipeline and add a task that will call
             // ChannelHandler.handlerAdded(...) once the channel is registered.
             if (!registered) {
+                newCtx.setBeforeAdded();
                 callHandlerCallbackLater(newCtx, true);
                 return this;
             }
 
             EventExecutor executor = newCtx.executor();
             if (!executor.inEventLoop()) {
+                newCtx.setBeforeAdded();
                 executor.execute(new Runnable() {
                     @Override
                     public void run() {
@@ -297,11 +303,13 @@ public class DefaultChannelPipeline implements ChannelPipeline {
             // In this case we remove the context from the pipeline and add a task that will call
             // ChannelHandler.handlerRemoved(...) once the channel is registered.
             if (!registered) {
+                newCtx.setBeforeAdded();
                 callHandlerCallbackLater(newCtx, true);
                 return this;
             }
             EventExecutor executor = newCtx.executor();
             if (!executor.inEventLoop()) {
+                newCtx.setBeforeAdded();
                 executor.execute(new Runnable() {
                     @Override
                     public void run() {
