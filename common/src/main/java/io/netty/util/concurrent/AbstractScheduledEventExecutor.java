@@ -130,6 +130,15 @@ public abstract class AbstractScheduledEventExecutor extends AbstractEventExecut
         return scheduledTask != null && scheduledTask.deadlineNanos() <= nanoTime();
     }
 
+    /**
+     * Returns {@code true} if a scheduled task is ready for processing.
+     */
+    protected final boolean hasScheduledTasks(long nanotime) {
+        Queue<ScheduledFutureTask<?>> scheduledTaskQueue = this.scheduledTaskQueue;
+        ScheduledFutureTask<?> scheduledTask = scheduledTaskQueue == null ? null : scheduledTaskQueue.peek();
+        return scheduledTask != null && scheduledTask.deadlineNanos() <= nanotime;
+    }
+
     @Override
     public  ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
         ObjectUtil.checkNotNull(command, "command");

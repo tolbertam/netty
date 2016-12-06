@@ -35,7 +35,7 @@ import io.netty.util.internal.PlatformDependent;
  * We use {@code fd} if the {@code epoll_data union} to store the actual file descriptor of an
  * {@link AbstractEpollChannel} and so be able to map it later.
  */
-final class EpollEventArray {
+public final class EpollEventArray {
     // Size of the epoll_event struct
     private static final int EPOLL_EVENT_SIZE = Native.sizeofEpollEvent();
     // The offsiet of the data union in the epoll_event struct
@@ -67,14 +67,14 @@ final class EpollEventArray {
      * Return the length of the {@link EpollEventArray} which represent the maximum number of {@code epoll_events}
      * that can be stored in it.
      */
-    int length() {
+    public int length() {
         return length;
     }
 
     /**
      * Increase the storage of this {@link EpollEventArray}.
      */
-    void increase() {
+    public void increase() {
         // double the size
         length <<= 1;
         free();
