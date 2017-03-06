@@ -20,6 +20,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SelectStrategy;
 import io.netty.channel.SingleThreadEventLoop;
 import io.netty.channel.epoll.AbstractEpollChannel.AbstractEpollUnsafe;
+import io.netty.channel.unix.AIOContext;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.IntSupplier;
 import io.netty.util.collection.IntObjectHashMap;
@@ -48,6 +49,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
 
     protected final FileDescriptor epollFd;
     protected final FileDescriptor eventFd;
+    protected final AIOContext aioContext;
     private final IntObjectMap<AbstractEpollChannel> channels = new IntObjectHashMap<AbstractEpollChannel>(4096);
     protected final boolean allowGrowing;
     protected final EpollEventArray events;
@@ -82,9 +84,17 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         boolean success = false;
         FileDescriptor epollFd = null;
         FileDescriptor eventFd = null;
+        AIOContext aioContext = null;
+        this.epollFd = epollFd = Native.newEpollCreate();
+        this.eventFd = eventFd = Native.newEventFd();
         try {
-            this.epollFd = epollFd = Native.newEpollCreate();
-            this.eventFd = eventFd = Native.newEventFd();
+            aioContext = Native.createAIOContext(1024);
+        } catch (IOException e) {
+            logger.error("Unable to initialize AIO", e);
+        }
+        this.aioContext = aioContext;
+
+        try {
             try {
                 Native.epollCtlAdd(epollFd.intValue(), eventFd.intValue(), Native.EPOLLIN);
             } catch (IOException e) {
@@ -365,6 +375,11 @@ public class EpollEventLoop extends SingleThreadEventLoop {
 
                 AbstractEpollChannel ch = channels.get(fd);
                 if (ch != null) {
+                    if (ch instanceof AIOEpollFileChannel.EventFileChannel) {
+                        ((AIOEpollFileChannel.EventFileChannel) ch).processReady();
+                        continue;
+                    }
+
                     // Don't change the ordering of processing EPOLLOUT | EPOLLRDHUP / EPOLLIN if you're not 100%
                     // sure about it!
                     // Re-ordering can easily introduce bugs and bad side-effects, as we found out painfully in the
