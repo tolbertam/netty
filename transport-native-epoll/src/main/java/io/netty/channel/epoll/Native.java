@@ -30,6 +30,7 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.Locale;
+import java.util.function.Consumer;
 
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollerr;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollet;
@@ -268,7 +269,8 @@ public final class Native {
     private static native long createAIOContext0(int maxConcurrency) throws IOException;
 
     public static long submitAIORead(AIOContext aioContext, int eventFd, int fd,
-                                     long offset, long length, ByteBuffer buffer) throws IOException {
+                                     long offset, long length, ByteBuffer buffer)
+    throws IOException {
         long nextId = aioContext.getNextId();
         submitAIORead0(aioContext.getAddress(), eventFd, fd, PlatformDependent.directBufferAddress(buffer),
                        offset, length, nextId);

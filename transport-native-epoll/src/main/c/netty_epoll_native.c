@@ -780,6 +780,11 @@ static void netty_epoll_native_submitAIORead0(JNIEnv* env, jclass clazz, jlong c
 
     io_context_t *ctx = (io_context_t *) ctxaddress;
 
+    if (bufaddress % 512 != 0) {
+       netty_unix_errors_throwRuntimeException(env, "buffer is not memory aligned");
+       return;
+    }
+
     struct netty_iocb *niocbp = malloc(sizeof(struct netty_iocb));
     struct iocb *iocbp = &niocbp->iocb;
 
@@ -811,16 +816,25 @@ static void netty_epoll_native_getAIOEvents0(JNIEnv* env, jclass clazz, jlong ct
                 struct io_event event = events[j];
                 struct netty_iocb* niocb = (struct netty_iocb *) event.obj;
 
-                if (event.res2 != 0) {
+                if (((long)event.res2) != 0) {
                     netty_unix_errors_throwRuntimeException(env, "io_getevents error res2");
+                    return;
+                }
+
+                if (((long)event.res) < 0) {
+                    netty_unix_errors_throwChannelExceptionErrorNo(env, "io_events() failed to read event: ", event.res);
                     return;
                 }
 
                 keysArray[(int) i] = (long) niocb->request_key;
                 keysArray[(int) (i + num_events)] = (long) event.res;
 
+                //fprintf(stderr, "Event %ld read: %ld\n", niocb->request_key, (long) event.res);
+
                 free(niocb);
             }
+        } else {
+           netty_unix_errors_throwChannelExceptionErrorNo(env, "io_getevents() failed: ", r);
         }
     }
 

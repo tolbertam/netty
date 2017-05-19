@@ -23,42 +23,41 @@ import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.CompletionHandler;
 import java.nio.channels.FileLock;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.channel.unix.Socket;
 import io.netty.util.collection.LongObjectHashMap;
 import io.netty.util.collection.LongObjectMap;
+import io.netty.util.internal.logging.InternalLogger;
+import io.netty.util.internal.logging.InternalLoggerFactory;
 
 
 public class AIOEpollFileChannel extends AsynchronousFileChannel {
+    private static final InternalLogger logger = InternalLoggerFactory.getInstance(AIOEpollFileChannel.class);
 
+    private final File fileObject;
+    private final long fileLength;
     private final FileDescriptor file;
     private final FileDescriptor eventFd;
     private final EpollEventLoop epollEventLoop;
     private final EventFileChannel nettyChannel;
-    private final LongObjectMap<IORequest> outstandingRequests;
-
-    class IORequest<A> {
-        public final ByteBuffer buffer;
-        public final CompletionHandler handler;
-        public final A attachment;
-
-        IORequest(ByteBuffer buffer, CompletionHandler handler, A attachment) {
-            this.buffer = buffer;
-            this.handler = handler;
-            this.attachment = attachment;
-        }
-    }
 
     public AIOEpollFileChannel(File file, EpollEventLoop eventLoop) throws IOException {
-        this.file = FileDescriptor.from(file, FileDescriptor.O_RDONLY);
+        this.fileObject = file;
+        this.fileLength = file.length();
+        this.file = FileDescriptor.from(file, FileDescriptor.O_RDONLY | FileDescriptor.O_DIRECT);
         this.eventFd = Native.newEventFd();
         this.epollEventLoop = eventLoop;
         this.nettyChannel = new EventFileChannel(this);
-        this.outstandingRequests = new LongObjectHashMap<IORequest>(128);
 
         Runnable register = new Runnable() {
             public void run() {
@@ -75,6 +74,18 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         } else {
             epollEventLoop.submit(register);
         }
+    }
+
+    public int getEventFd() {
+        return eventFd.intValue();
+    }
+
+    public int getFd() {
+        return file.intValue();
+    }
+
+    public File getFileObject() {
+        return fileObject;
     }
 
     public long size() throws IOException {
@@ -109,15 +120,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
         Runnable action = new Runnable() {
             public void run() {
-                try {
-                    long id = Native.submitAIORead(epollEventLoop.aioContext, eventFd.intValue(),
-                                                   file.intValue(), position, dst.limit(), dst);
-
-                    outstandingRequests.put(id, new IORequest<A>(dst, handler, attachment));
-
-                } catch (IOException e) {
-                    handler.failed(e, attachment);
-                }
+                epollEventLoop.aioContext.read(AIOEpollFileChannel.this, dst, position, attachment, handler);
             }
         };
 
@@ -188,29 +191,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         }
 
         public void processReady() {
-            try {
-                long numReady = Native.eventFdRead(eventFd.intValue());
-                long[] ids = Native.getAIOEvents(epollEventLoop.aioContext, numReady);
-                assert ids.length == numReady * 2;
-
-                for (int i = 0; i < numReady; i++) {
-                    long id = ids[i];
-                    long lengthRead = ids[i + (int) numReady];
-                    IORequest request = outstandingRequests.remove(id);
-
-                    if (request == null) {
-                        throw new IllegalStateException();
-                    }
-
-                    int len = (int) lengthRead;
-                    assert len == lengthRead;
-                    request.buffer.limit(len);
-                    request.buffer.position(len);
-                    request.handler.completed(len, request.attachment);
-                }
-            } catch (IOException e) {
-                throw new IOError(e);
-            }
+            epollEventLoop.aioContext.processReady(AIOEpollFileChannel.this);
         }
 
         public EpollChannelConfig config() {

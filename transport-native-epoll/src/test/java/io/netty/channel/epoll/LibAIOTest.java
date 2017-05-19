@@ -21,6 +21,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.AsynchronousFileChannel;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -28,10 +29,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Assert;
 import org.junit.Test;
 
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoopGroup;
@@ -42,7 +46,6 @@ import sun.misc.SharedSecrets;
 
 
 public class LibAIOTest {
-
     @Test
     public void nativeReadTest() throws IOException, InterruptedException {
         EventLoopGroup group = new EpollEventLoopGroup(1);
@@ -65,17 +68,16 @@ public class LibAIOTest {
         EpollEventLoop loop = (EpollEventLoop) group.next();
 
         AIOContext aio = Native.createAIOContext(10);
-        ByteBuffer buf = PlatformDependent.allocateDirectNoCleaner(1024);
+        ByteBuffer buf = allocateAlignedByteBuffer(1024 * 1024, 512);
 
-        long id = Native.submitAIORead(aio, loop.eventFd.intValue(),
-                                       SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
-                                       0, value.length(), buf);
+        long id = 1; //Native.submitAIORead(aio, loop.eventFd.intValue(),
+                     //                  SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
+                     //                  0, value.length(), buf);
 
         long[] ids = Native.getAIOEvents(aio, 1);
 
         Assert.assertEquals(id, ids[0]);
         byte[] output = new byte[value.length()];
-        buf.flip();
         buf.get(output);
         Assert.assertEquals(value, new String(output));
 
@@ -84,12 +86,24 @@ public class LibAIOTest {
 
     @Test
     public void epollTriggeredReadTest() throws IOException, InterruptedException, ExecutionException {
-        EventLoopGroup group = new EpollEventLoopGroup(1);
+        final EventLoopGroup group = new EpollEventLoopGroup(1).next();
+        final EpollEventLoop[] loops = new EpollEventLoop[8];
+        for (int i = 0; i < 8; i++) {
+            loops[i] = (EpollEventLoop) group.next();
+        }
+
         final File file = File.createTempFile("netty-aio", null);
         file.deleteOnExit();
 
-        final String value = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRR" +
+        //Make value 1 page
+        String tmp = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRR" +
                        "SSSSTTTUUUUVVVVWWWWXXXXYYYYZZZZ";
+
+        while (tmp.length() < 8192) {
+            tmp += tmp;
+        }
+
+        final String value = tmp.substring(0, 8192);
 
         FileWriter write = new FileWriter(file);
         for (int i = 0; i < 1024; i++) {
@@ -99,40 +113,78 @@ public class LibAIOTest {
         write.flush();
         write.close();
 
-        final EpollEventLoop loop = (EpollEventLoop) group.next();
-
-        int THREADS = 8;
-
+        int THREADS = 64;
+        final AtomicReference<Throwable> err = new AtomicReference<Throwable>();
         ExecutorService es = Executors.newFixedThreadPool(THREADS);
         final CountDownLatch latch = new CountDownLatch(THREADS);
 
         for (int i = 0; i < THREADS; i++) {
+            final int tid = i;
             es.submit(new Runnable() {
                 public void run() {
+                    int idx = 0;
                     try {
-                        AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop);
-                        ByteBuffer buf = PlatformDependent.allocateDirectNoCleaner(1024);
+                        final EpollEventLoop loop = loops[tid % 8];
 
-                        for (int i = 0; i < 1024; i++) {
+                        AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop);
+                        ByteBuffer buf = allocateAlignedByteBuffer(8192, 512);
+                        for (int i = 0; i < 102400; i++) {
+                            //System.err.println(loop.threadProperties().name());
+
                             buf.clear();
-                            Future<Integer> f = fc.read(buf, value.length() * i);
+                            idx = i;
+                            Future<Integer> f = fc.read(buf, value.length() * (i % 1024));
                             int len = f.get();
+                            buf.flip();
+                            Assert.assertEquals(buf.position(), 0);
                             Assert.assertEquals(buf.limit(), len);
 
                             byte[] output = new byte[value.length()];
-                            buf.flip();
                             buf.get(output);
                             Assert.assertEquals(value, new String(output));
                         }
                     } catch (Throwable t) {
-                        throw new AssertionError(t);
+                        System.err.println("Thread: " + tid + ", Index: " + idx);
+                        t.printStackTrace();
+                        err.set(t);
+                    } finally {
+                        latch.countDown();
                     }
-                    latch.countDown();
                 }
             });
         }
 
         latch.await();
+        Assert.assertNull(err.get());
         group.shutdownGracefully();
+    }
+
+    public static ByteBuffer allocateAlignedByteBuffer(int capacity, long align) {
+        // Power of 2 --> single bit, none power of 2 alignments are not allowed.
+        if (Long.bitCount(align) != 1) {
+            throw new IllegalArgumentException("Alignment must be a power of 2");
+        }
+        // We over allocate by the alignment so we know we can have a large enough aligned
+        // block of memory to use. Also set order to native while we are here.
+        ByteBuffer buffy = PlatformDependent.allocateDirectNoCleaner((int) (capacity + align));
+        long address = PlatformDependent.directBufferAddress(buffy);
+        // check if we got lucky and the address is already aligned
+        if ((address & (align - 1)) == 0) {
+            // set the new limit to intended capacity
+            buffy.limit(capacity);
+            // the slice is now an aligned buffer of the required capacity
+            return buffy.slice().order(ByteOrder.nativeOrder());
+        } else {
+            // we need to shift the start position to an aligned address --> address + (align - (address % align))
+            // the modulo replacement with the & trick is valid for power of 2 values only
+            int newPosition = (int) (align - (address & (align - 1)));
+            // change the position
+            buffy.position(newPosition);
+            int newLimit = newPosition + capacity;
+            // set the new limit to accomodate offset + intended capacity
+            buffy.limit(newLimit);
+            // the slice is now an aligned buffer of the required capacity
+            return buffy.slice().order(ByteOrder.nativeOrder());
+        }
     }
 }
