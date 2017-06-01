@@ -769,6 +769,11 @@ static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jin
     return (long) ctx;
 }
 
+static void netty_epoll_native_destroyAIOContext0(JNIEnv* env, jclass clazz, jlong ctxaddr)
+{
+    free ((io_context_t *) ctxaddr);
+}
+
 struct netty_iocb
 {
     struct iocb iocb;
@@ -900,7 +905,8 @@ static const JNINativeMethod fixed_method_table[] = {
   { "setTcpMd5Sig0", "(I[BI[B)V", (void *) netty_epoll_native_setTcpMd5Sig0 },
   { "createAIOContext0", "(I)J", (void *) netty_epoll_native_createAIOContext0 },
   { "submitAIORead0", "(JIIJJJJ)V", (void *) netty_epoll_native_submitAIORead0 },
-  { "getAIOEvents0", "(JJ[J)V", (void *) netty_epoll_native_getAIOEvents0 }
+  { "getAIOEvents0", "(JJ[J)V", (void *) netty_epoll_native_getAIOEvents0 },
+  { "destroyAIOContext0", "(J)V", (void *) netty_epoll_native_destroyAIOContext0 }
 };
 static const jint fixed_method_table_size = sizeof(fixed_method_table) / sizeof(fixed_method_table[0]);
 

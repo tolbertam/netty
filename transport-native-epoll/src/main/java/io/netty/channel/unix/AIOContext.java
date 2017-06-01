@@ -34,11 +34,21 @@ public class AIOContext {
     private final long address;
     private long nextId;
     private final Map<Long, IORequest> outstandingRequests;
+    private volatile boolean destroyed;
 
     public AIOContext(long address) {
         this.address = address;
         this.outstandingRequests = new LongObjectHashMap<IORequest>(128);
         this.nextId = 0;
+    }
+
+    public void destroy() {
+        if (destroyed) {
+            return;
+        }
+
+        destroyed = true;
+        Native.destroyAIOContext(this);
     }
 
     public long getNextId() {
@@ -51,6 +61,7 @@ public class AIOContext {
 
     public <A> void read(final AIOEpollFileChannel file, final ByteBuffer dst, final long position, final A attachment,
                          final CompletionHandler<Integer, ? super A> handler) {
+        assert !destroyed;
         assert dst.isDirect();
         assert dst.position() == 0;
 
@@ -78,6 +89,7 @@ public class AIOContext {
     }
 
     public void processReady(AIOEpollFileChannel file) {
+        assert !destroyed;
         IORequest request = null;
         try {
             long numReady = Native.eventFdRead(file.getEventFd());

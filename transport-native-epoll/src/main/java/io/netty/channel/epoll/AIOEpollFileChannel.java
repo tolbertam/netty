@@ -115,8 +115,19 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
     public <A> void read(final ByteBuffer dst, final long position, final A attachment,
                          final CompletionHandler<Integer, ? super A> handler) {
-        assert dst.isDirect();
-        assert dst.position() == 0;
+        if (!dst.isDirect()) {
+            handler.failed(new IllegalArgumentException("ByteBuffer is not direct"), attachment);
+            return;
+        }
+
+        if (dst.position() != 0) {
+            handler.failed(new IllegalArgumentException("ByteBuffer position must be 0"), attachment);
+            return;
+        }
+
+        if (position < 0) {
+            handler.failed(new IllegalArgumentException("Position must be >= 0"), attachment);
+        }
 
         Runnable action = new Runnable() {
             public void run() {

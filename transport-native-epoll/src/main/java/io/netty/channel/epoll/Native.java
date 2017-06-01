@@ -266,7 +266,12 @@ public final class Native {
         return new AIOContext(ctxAddress);
     }
 
+    public static void destroyAIOContext(AIOContext ctx) {
+        destroyAIOContext0(ctx.getAddress());
+    }
+
     private static native long createAIOContext0(int maxConcurrency) throws IOException;
+    private static native void destroyAIOContext0(long ctxAddr);
 
     public static long submitAIORead(AIOContext aioContext, int eventFd, int fd,
                                      long offset, long length, ByteBuffer buffer)

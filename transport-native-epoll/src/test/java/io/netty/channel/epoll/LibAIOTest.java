@@ -19,33 +19,32 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.AsynchronousFileChannel;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Assert;
 import org.junit.Test;
 
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelOutboundBuffer;
-import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.unix.AIOContext;
-import io.netty.channel.unix.Socket;
 import io.netty.util.internal.PlatformDependent;
 import sun.misc.SharedSecrets;
 
 
 public class LibAIOTest {
+
+    @Test
+    public void globalFlagTest() {
+        Assert.assertTrue(Aio.isAvailable());
+    }
+
     @Test
     public void nativeReadTest() throws IOException, InterruptedException {
         EventLoopGroup group = new EpollEventLoopGroup(1);
@@ -55,24 +54,25 @@ public class LibAIOTest {
         String value = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRR" +
                        "SSSSTTTUUUUVVVVWWWWXXXXYYYYZZZZ";
 
+        int len = 0;
         FileWriter write = new FileWriter(file);
         for (int i = 0; i < 1024; i++) {
             write.append(value);
+            len += value.length();
         }
 
         write.flush();
         write.close();
-
         FileInputStream fileReader = new FileInputStream(file);
 
         EpollEventLoop loop = (EpollEventLoop) group.next();
 
         AIOContext aio = Native.createAIOContext(10);
-        ByteBuffer buf = allocateAlignedByteBuffer(1024 * 1024, 512);
+        ByteBuffer buf = allocateAlignedByteBuffer(65536, 512);
 
-        long id = 1; //Native.submitAIORead(aio, loop.eventFd.intValue(),
-                     //                  SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
-                     //                  0, value.length(), buf);
+        long id = Native.submitAIORead(aio, loop.eventFd.intValue(),
+                                       SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
+                                       0, 65536, buf);
 
         long[] ids = Native.getAIOEvents(aio, 1);
 
@@ -86,7 +86,8 @@ public class LibAIOTest {
 
     @Test
     public void epollTriggeredReadTest() throws IOException, InterruptedException, ExecutionException {
-        final EventLoopGroup group = new EpollEventLoopGroup(1).next();
+        final int LEN = 65536;
+        final EventLoopGroup group = new EpollEventLoopGroup(8).next();
         final EpollEventLoop[] loops = new EpollEventLoop[8];
         for (int i = 0; i < 8; i++) {
             loops[i] = (EpollEventLoop) group.next();
@@ -99,11 +100,11 @@ public class LibAIOTest {
         String tmp = "AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPPQQQQRRRR" +
                        "SSSSTTTUUUUVVVVWWWWXXXXYYYYZZZZ";
 
-        while (tmp.length() < 8192) {
+        while (tmp.length() < LEN) {
             tmp += tmp;
         }
 
-        final String value = tmp.substring(0, 8192);
+        final String value = tmp.substring(0, LEN);
 
         FileWriter write = new FileWriter(file);
         for (int i = 0; i < 1024; i++) {
@@ -127,8 +128,8 @@ public class LibAIOTest {
                         final EpollEventLoop loop = loops[tid % 8];
 
                         AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop);
-                        ByteBuffer buf = allocateAlignedByteBuffer(8192, 512);
-                        for (int i = 0; i < 102400; i++) {
+                        ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
+                        for (int i = 0; i < 1024; i++) {
                             //System.err.println(loop.threadProperties().name());
 
                             buf.clear();
