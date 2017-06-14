@@ -65,16 +65,18 @@ public class AIOContext {
         assert dst.isDirect();
         assert dst.position() == 0;
 
+        int length = dst.limit();
         try {
-            final int length = (dst.limit() & 511) == 0 ? dst.limit() : ((dst.limit() + 511) & ~511);
-            if (dst.capacity() < length) {
-                throw new RuntimeException("supplied buffer isn't long enough to handle read length alignment");
-            }
+            if (file.isDirect()) {
+                length = (dst.limit() & 511) == 0 ? dst.limit() : ((dst.limit() + 511) & ~511);
+                if (dst.capacity() < length) {
+                    throw new RuntimeException("supplied buffer isn't long enough to handle read length alignment");
+                }
 
-            if ((position & 511) != 0) {
-                throw new IOException("Read position must be aligned to sector size (usually 512)");
+                if ((position & 511) != 0) {
+                    throw new IOException("Read position must be aligned to sector size (usually 512)");
+                }
             }
-
             long id = Native.submitAIORead(this, file.getEventFd(), file.getFd(), position, length, dst);
 
             IORequest r = outstandingRequests.putIfAbsent(id, new IORequest<A>(dst, position, length, handler,

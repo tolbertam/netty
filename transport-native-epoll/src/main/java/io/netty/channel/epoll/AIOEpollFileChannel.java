@@ -49,6 +49,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     private final FileDescriptor eventFd;
     private final EpollEventLoop epollEventLoop;
     private final EventFileChannel nettyChannel;
+    private final boolean isDirect;
 
     public AIOEpollFileChannel(File file, EpollEventLoop eventLoop, int flags) throws IOException {
         this.fileObject = file;
@@ -60,6 +61,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         this.eventFd = Native.newEventFd();
         this.epollEventLoop = eventLoop;
         this.nettyChannel = new EventFileChannel(this);
+        this.isDirect = flags == FileDescriptor.O_DIRECT;
 
         Runnable register = new Runnable() {
             public void run() {
@@ -88,6 +90,10 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
     public File getFileObject() {
         return fileObject;
+    }
+
+    public boolean isDirect() {
+        return isDirect;
     }
 
     public long size() throws IOException {
