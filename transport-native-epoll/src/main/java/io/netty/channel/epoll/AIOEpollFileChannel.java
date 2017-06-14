@@ -45,16 +45,18 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AIOEpollFileChannel.class);
 
     private final File fileObject;
-    private final long fileLength;
     private final FileDescriptor file;
     private final FileDescriptor eventFd;
     private final EpollEventLoop epollEventLoop;
     private final EventFileChannel nettyChannel;
 
-    public AIOEpollFileChannel(File file, EpollEventLoop eventLoop) throws IOException {
+    public AIOEpollFileChannel(File file, EpollEventLoop eventLoop, int flags) throws IOException {
         this.fileObject = file;
-        this.fileLength = file.length();
-        this.file = FileDescriptor.from(file, FileDescriptor.O_RDONLY | FileDescriptor.O_DIRECT);
+
+        if (flags != 0 && flags != FileDescriptor.O_DIRECT) {
+            throw new IllegalArgumentException("Only supports read-only files");
+        }
+        this.file = FileDescriptor.from(file, flags);
         this.eventFd = Native.newEventFd();
         this.epollEventLoop = eventLoop;
         this.nettyChannel = new EventFileChannel(this);

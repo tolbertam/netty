@@ -34,6 +34,7 @@ import org.junit.Test;
 
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.unix.AIOContext;
+import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.PlatformDependent;
 import sun.misc.SharedSecrets;
 
@@ -127,7 +128,8 @@ public class LibAIOTest {
                     try {
                         final EpollEventLoop loop = loops[tid % 8];
 
-                        AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop);
+                        AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop, FileDescriptor.O_RDONLY |
+                                                                             FileDescriptor.O_DIRECT);
                         ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
                         for (int i = 0; i < 1024; i++) {
                             //System.err.println(loop.threadProperties().name());
