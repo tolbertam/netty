@@ -123,6 +123,11 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
     public <A> void read(final ByteBuffer dst, final long position, final A attachment,
                          final CompletionHandler<Integer, ? super A> handler) {
+        if (!isOpen()) {
+            handler.failed(new IOException("File has been closed"), attachment);
+            return;
+        }
+
         if (!dst.isDirect()) {
             handler.failed(new IllegalArgumentException("ByteBuffer is not direct"), attachment);
             return;
@@ -180,10 +185,26 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     public void close() throws IOException {
         Runnable close = new Runnable() {
             public void run() {
+                if (!isOpen()) {
+                    return;
+                }
+
                 try {
                     nettyChannel.doClose();
                 } catch (Exception e) {
                     throw new IOError(e);
+                } finally {
+                    try {
+                        eventFd.close();
+                    } catch (IOException e) {
+                        logger.trace("Error closing eventFd", e);
+                    }
+
+                    try {
+                        file.close();
+                    } catch (IOException e) {
+                        logger.trace("Error closing file", e);
+                    }
                 }
             }
         };
