@@ -304,7 +304,9 @@ public class EpollSpliceTest {
                 throws Exception {
             channel = ctx.channel();
             final EpollSocketChannel ch = (EpollSocketChannel) ctx.channel();
-            final FileDescriptor fd = FileDescriptor.from(file);
+            final FileDescriptor fd = FileDescriptor.from(file, FileDescriptor.O_WRONLY |
+                                                                FileDescriptor.O_CREAT |
+                                                                FileDescriptor.O_TRUNC);
 
             future = ch.spliceTo(fd, 0, data.length);
         }

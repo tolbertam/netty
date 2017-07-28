@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <libaio.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/sendfile.h>
@@ -132,13 +133,15 @@ static void netty_epoll_native_eventFdWrite(JNIEnv* env, jclass clazz, jint fd, 
     }
 }
 
-static void netty_epoll_native_eventFdRead(JNIEnv* env, jclass clazz, jint fd) {
+static jlong netty_epoll_native_eventFdRead(JNIEnv* env, jclass clazz, jint fd) {
     uint64_t eventfd_t;
 
     if (eventfd_read(fd, &eventfd_t) != 0) {
         // something is serious wrong
         netty_unix_errors_throwRuntimeException(env, "eventfd_read() failed");
     }
+
+    return (long) eventfd_t;
 }
 
 static jint netty_epoll_native_epollCreate(JNIEnv* env, jclass clazz) {
@@ -392,6 +395,99 @@ static jint netty_epoll_native_tcpMd5SigMaxKeyLen(JNIEnv* env, jclass clazz) {
 
     return TCP_MD5SIG_MAXKEYLEN;
 }
+
+//LibAIO methods
+
+static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jint concurrency)
+{
+    io_context_t *ctx = malloc(sizeof(io_context_t)); //Created by io_setup
+    memset(ctx, 0, sizeof(ctx));
+
+    int r = io_setup(concurrency, ctx);
+    if (r != 0) {
+        netty_unix_errors_throwChannelExceptionErrorNo(env, "io_setup() failed: ", -r);
+    }
+
+    return (long) ctx;
+}
+
+static void netty_epoll_native_destroyAIOContext0(JNIEnv* env, jclass clazz, jlong ctxaddr)
+{
+    free ((io_context_t *) ctxaddr);
+}
+
+struct netty_iocb
+{
+    struct iocb iocb;
+    long request_key;
+};
+
+
+static void netty_epoll_native_submitAIORead0(JNIEnv* env, jclass clazz, jlong ctxaddress, jint efd, jint fd, jlong bufaddress, jlong offset, jlong length, jlong key) {
+
+    io_context_t *ctx = (io_context_t *) ctxaddress;
+
+    if (bufaddress % 512 != 0) {
+       netty_unix_errors_throwRuntimeException(env, "buffer is not memory aligned");
+       return;
+    }
+
+    struct netty_iocb *niocbp = malloc(sizeof(struct netty_iocb));
+    struct iocb *iocbp = &niocbp->iocb;
+
+    io_prep_pread(iocbp, fd, (void *)bufaddress, length, offset);
+    io_set_eventfd(iocbp, efd);
+    niocbp->request_key = key;
+
+    int r = io_submit(*ctx, 1, &iocbp);
+    if (r != 1) {
+        netty_unix_errors_throwChannelExceptionErrorNo(env, "io_submit() failed: ", -r);
+    }
+}
+
+static void netty_epoll_native_getAIOEvents0(JNIEnv* env, jclass clazz, jlong ctxaddress, jlong num_events, jlongArray keys)
+{
+    io_context_t *ctx = (io_context_t *) ctxaddress;
+    struct timespec tms;
+    struct io_event events[num_events];
+    unsigned long keysArray[num_events * 2];
+
+    int r,j;
+    long i = 0;
+    while (i < num_events) {
+        tms.tv_sec = 0;
+        tms.tv_nsec = 0;
+        r = io_getevents(*ctx, 1, num_events - i, events, &tms);
+        if (r > 0) {
+            for (j = 0; j < r; ++j, ++i) {
+                struct io_event event = events[j];
+                struct netty_iocb* niocb = (struct netty_iocb *) event.obj;
+
+                if (((long)event.res2) != 0) {
+                    netty_unix_errors_throwRuntimeException(env, "io_getevents error res2");
+                    return;
+                }
+
+                if (((long)event.res) < 0) {
+                    netty_unix_errors_throwChannelExceptionErrorNo(env, "io_events() failed to read event: ", event.res);
+                    return;
+                }
+
+                keysArray[(int) i] = (long) niocb->request_key;
+                keysArray[(int) (i + num_events)] = (long) event.res;
+
+                //fprintf(stderr, "Event %ld read: %ld\n", niocb->request_key, (long) event.res);
+
+                free(niocb);
+            }
+        } else {
+           netty_unix_errors_throwChannelExceptionErrorNo(env, "io_getevents() failed: ", r);
+        }
+    }
+
+    (*env)->SetLongArrayRegion(env, keys, 0, num_events * 2, keysArray);
+}
+
 // JNI Registered Methods End
 
 // JNI Method Registration Table Begin
@@ -410,7 +506,7 @@ static const jint statically_referenced_fixed_method_table_size = sizeof(statica
 static const JNINativeMethod fixed_method_table[] = {
   { "eventFd", "()I", (void *) netty_epoll_native_eventFd },
   { "eventFdWrite", "(IJ)V", (void *) netty_epoll_native_eventFdWrite },
-  { "eventFdRead", "(I)V", (void *) netty_epoll_native_eventFdRead },
+  { "eventFdRead", "(I)J", (void *) netty_epoll_native_eventFdRead },
   { "epollCreate", "()I", (void *) netty_epoll_native_epollCreate },
   { "epollWait0", "(IJII)I", (void *) netty_epoll_native_epollWait0 },
   { "epollCtlAdd0", "(III)I", (void *) netty_epoll_native_epollCtlAdd0 },
@@ -420,7 +516,11 @@ static const JNINativeMethod fixed_method_table[] = {
   // "sendFile0" has a dynamic signature
   { "sizeofEpollEvent", "()I", (void *) netty_epoll_native_sizeofEpollEvent },
   { "offsetofEpollData", "()I", (void *) netty_epoll_native_offsetofEpollData },
-  { "splice0", "(IJIJJ)I", (void *) netty_epoll_native_splice0 }
+  { "splice0", "(IJIJJ)I", (void *) netty_epoll_native_splice0 },
+  { "createAIOContext0", "(I)J", (void *) netty_epoll_native_createAIOContext0 },
+  { "submitAIORead0", "(JIIJJJJ)V", (void *) netty_epoll_native_submitAIORead0 },
+  { "getAIOEvents0", "(JJ[J)V", (void *) netty_epoll_native_getAIOEvents0 },
+  { "destroyAIOContext0", "(J)V", (void *) netty_epoll_native_destroyAIOContext0 }
 };
 static const jint fixed_method_table_size = sizeof(fixed_method_table) / sizeof(fixed_method_table[0]);
 

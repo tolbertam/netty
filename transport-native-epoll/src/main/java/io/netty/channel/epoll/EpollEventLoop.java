@@ -20,6 +20,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SelectStrategy;
 import io.netty.channel.SingleThreadEventLoop;
 import io.netty.channel.epoll.AbstractEpollChannel.AbstractEpollUnsafe;
+import io.netty.channel.unix.AIOContext;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.channel.unix.IovArray;
 import io.netty.util.IntSupplier;
@@ -42,9 +43,9 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 /**
  * {@link EventLoop} which uses epoll under the covers. Only works on Linux!
  */
-final class EpollEventLoop extends SingleThreadEventLoop {
+public class EpollEventLoop extends SingleThreadEventLoop {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(EpollEventLoop.class);
-    private static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
+    protected static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
 
     static {
@@ -53,14 +54,15 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         Epoll.ensureAvailability();
     }
 
-    private final FileDescriptor epollFd;
-    private final FileDescriptor eventFd;
+    protected final FileDescriptor epollFd;
+    protected final FileDescriptor eventFd;
+    protected final AIOContext aioContext;
     private final IntObjectMap<AbstractEpollChannel> channels = new IntObjectHashMap<AbstractEpollChannel>(4096);
-    private final boolean allowGrowing;
-    private final EpollEventArray events;
+    protected final boolean allowGrowing;
+    protected final EpollEventArray events;
     private final IovArray iovArray = new IovArray();
-    private final SelectStrategy selectStrategy;
-    private final IntSupplier selectNowSupplier = new IntSupplier() {
+    protected final SelectStrategy selectStrategy;
+    protected final IntSupplier selectNowSupplier = new IntSupplier() {
         @Override
         public int get() throws Exception {
             return Native.epollWait(epollFd.intValue(), events, 0);
@@ -72,10 +74,10 @@ final class EpollEventLoop extends SingleThreadEventLoop {
             return EpollEventLoop.super.pendingTasks();
         }
     };
-    private volatile int wakenUp;
+    protected volatile int wakenUp;
     private volatile int ioRatio = 50;
 
-    EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
+    protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
                    SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
         super(parent, executor, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);
         selectStrategy = ObjectUtil.checkNotNull(strategy, "strategy");
@@ -89,9 +91,17 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         boolean success = false;
         FileDescriptor epollFd = null;
         FileDescriptor eventFd = null;
+        AIOContext aioContext = null;
+        this.epollFd = epollFd = Native.newEpollCreate();
+        this.eventFd = eventFd = Native.newEventFd();
         try {
-            this.epollFd = epollFd = Native.newEpollCreate();
-            this.eventFd = eventFd = Native.newEventFd();
+            aioContext = Native.createAIOContext(1024);
+        } catch (IOException e) {
+            logger.error("Unable to initialize AIO", e);
+        }
+        this.aioContext = aioContext;
+
+        try {
             try {
                 Native.epollCtlAdd(epollFd.intValue(), eventFd.intValue(), Native.EPOLLIN);
             } catch (IOException e) {
@@ -203,7 +213,7 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         this.ioRatio = ioRatio;
     }
 
-    private int epollWait(boolean oldWakenUp) throws IOException {
+    protected int epollWait(boolean oldWakenUp) throws IOException {
         int selectCnt = 0;
         long currentTimeNanos = System.nanoTime();
         long selectDeadLineNanos = currentTimeNanos + delayNanos(currentTimeNanos);
@@ -344,7 +354,7 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    private void closeAll() {
+    protected void closeAll() {
         try {
             Native.epollWait(epollFd.intValue(), events, 0);
         } catch (IOException ignore) {
@@ -363,7 +373,7 @@ final class EpollEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    private void processReady(EpollEventArray events, int ready) {
+    protected void processReady(EpollEventArray events, int ready) {
         for (int i = 0; i < ready; i ++) {
             final int fd = events.fd(i);
             if (fd == eventFd.intValue()) {
@@ -374,6 +384,11 @@ final class EpollEventLoop extends SingleThreadEventLoop {
 
                 AbstractEpollChannel ch = channels.get(fd);
                 if (ch != null) {
+                    if (ch instanceof AIOEpollFileChannel.EventFileChannel) {
+                        ((AIOEpollFileChannel.EventFileChannel) ch).processReady();
+                        continue;
+                    }
+
                     // Don't change the ordering of processing EPOLLOUT | EPOLLRDHUP / EPOLLIN if you're not 100%
                     // sure about it!
                     // Re-ordering can easily introduce bugs and bad side-effects, as we found out painfully in the

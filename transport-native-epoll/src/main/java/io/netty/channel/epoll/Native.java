@@ -16,6 +16,7 @@
 package io.netty.channel.epoll;
 
 import io.netty.channel.DefaultFileRegion;
+import io.netty.channel.unix.AIOContext;
 import io.netty.channel.unix.Errors.NativeIoException;
 import io.netty.util.internal.NativeLibraryLoader;
 import io.netty.util.internal.PlatformDependent;
@@ -26,8 +27,10 @@ import io.netty.util.internal.ThrowableUtil;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.Locale;
+import java.util.function.Consumer;
 
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollerr;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollet;
@@ -99,7 +102,7 @@ public final class Native {
 
     private static native int eventFd();
     public static native void eventFdWrite(int fd, long value);
-    public static native void eventFdRead(int fd);
+    public static native long eventFdRead(int fd);
 
     public static FileDescriptor newEpollCreate() {
         return new FileDescriptor(epollCreate());
@@ -182,6 +185,41 @@ public final class Native {
     // epoll_event related
     public static native int sizeofEpollEvent();
     public static native int offsetofEpollData();
+
+    // libaio related
+    public static AIOContext createAIOContext(int maxConcurrency) throws IOException {
+        long ctxAddress = createAIOContext0(maxConcurrency);
+        return new AIOContext(ctxAddress);
+    }
+
+    public static void destroyAIOContext(AIOContext ctx) {
+        destroyAIOContext0(ctx.getAddress());
+    }
+
+    private static native long createAIOContext0(int maxConcurrency) throws IOException;
+    private static native void destroyAIOContext0(long ctxAddr);
+
+    public static long submitAIORead(AIOContext aioContext, int eventFd, int fd,
+                                     long offset, long length, ByteBuffer buffer)
+    throws IOException {
+        long nextId = aioContext.getNextId();
+        submitAIORead0(aioContext.getAddress(), eventFd, fd, PlatformDependent.directBufferAddress(buffer),
+                       offset, length, nextId);
+
+        return nextId;
+    }
+
+    private static native void submitAIORead0(long ctxaddress, int efd, int fd, long bufaddress,
+                                             long offset, long length, long key) throws IOException;
+
+    public static long[] getAIOEvents(AIOContext aioContext, long numEvents) throws IOException {
+        long[] keys = new long[(int) numEvents * 2];
+        getAIOEvents0(aioContext.getAddress(), numEvents, keys);
+
+        return keys;
+    }
+
+    private static native void getAIOEvents0(long ctxaddress, long numEvents, long[] keys) throws IOException;
 
     private static void loadNativeLibrary() {
         String name = SystemPropertyUtil.get("os.name").toLowerCase(Locale.UK).trim();
