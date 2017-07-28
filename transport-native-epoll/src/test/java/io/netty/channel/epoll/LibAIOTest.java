@@ -29,11 +29,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 
+import io.netty.util.SuppressForbidden;
 import org.junit.Assert;
 import org.junit.Test;
 
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.unix.AIOContext;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.PlatformDependent;
 import sun.misc.SharedSecrets;
@@ -47,6 +47,7 @@ public class LibAIOTest {
     }
 
     @Test
+    @SuppressForbidden(reason = "to test native aio reads")
     public void nativeReadTest() throws IOException, InterruptedException {
         EventLoopGroup group = new EpollEventLoopGroup(1);
         File file = File.createTempFile("netty-aio", null);

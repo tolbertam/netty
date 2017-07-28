@@ -23,20 +23,11 @@ import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.CompletionHandler;
 import java.nio.channels.FileLock;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.unix.FileDescriptor;
-import io.netty.channel.unix.Socket;
-import io.netty.util.collection.LongObjectHashMap;
-import io.netty.util.collection.LongObjectMap;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -226,7 +217,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
      class EventFileChannel extends AbstractEpollChannel {
 
         EventFileChannel(AIOEpollFileChannel aioChannel) {
-            super(new Socket(aioChannel.eventFd.intValue()), Native.EPOLLIN | Native.EPOLLET);
+            super(new LinuxSocket(aioChannel.eventFd.intValue()), Native.EPOLLIN | Native.EPOLLET);
             this.eventLoop = epollEventLoop;
         }
 

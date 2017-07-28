@@ -16,21 +16,17 @@
 package io.netty.channel.epoll;
 
 import io.netty.channel.DefaultFileRegion;
-import io.netty.channel.unix.AIOContext;
 import io.netty.channel.unix.Errors.NativeIoException;
 import io.netty.util.internal.NativeLibraryLoader;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.channel.unix.FileDescriptor;
-import io.netty.channel.unix.NativeInetAddress;
 import io.netty.util.internal.ThrowableUtil;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.Locale;
-import java.util.function.Consumer;
 
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollerr;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollet;
@@ -41,9 +37,7 @@ import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.isSupp
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.isSupportingTcpFastopen;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.kernelVersion;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.tcpMd5SigMaxKeyLen;
-import static io.netty.channel.unix.Errors.ERRNO_EAGAIN_NEGATIVE;
 import static io.netty.channel.unix.Errors.ERRNO_EPIPE_NEGATIVE;
-import static io.netty.channel.unix.Errors.ERRNO_EWOULDBLOCK_NEGATIVE;
 import static io.netty.channel.unix.Errors.ioResult;
 import static io.netty.channel.unix.Errors.newConnectionResetException;
 import static io.netty.channel.unix.Errors.newIOException;

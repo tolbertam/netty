@@ -15,7 +15,6 @@
  */
 package io.netty.channel.epoll;
 
-import io.netty.channel.unix.AIOContext;
 import io.netty.util.internal.PlatformDependent;
 
 /**

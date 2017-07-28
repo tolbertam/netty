@@ -13,7 +13,7 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-package io.netty.channel.unix;
+package io.netty.channel.epoll;
 
 
 import java.io.IOError;
@@ -22,8 +22,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
 import java.util.Map;
 
-import io.netty.channel.epoll.AIOEpollFileChannel;
-import io.netty.channel.epoll.Native;
 import io.netty.util.collection.LongObjectHashMap;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
