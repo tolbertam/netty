@@ -47,6 +47,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     protected static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
 
+    private static final Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 1024);
     static {
         // Ensure JNI is initialized by the time this class is loaded by this time!
         // We use unix-common methods in this class which are backed by JNI methods.
@@ -94,7 +95,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         this.epollFd = epollFd = Native.newEpollCreate();
         this.eventFd = eventFd = Native.newEventFd();
         try {
-            aioContext = Native.createAIOContext(1024);
+            aioContext = Native.createAIOContext(aioMaxConcurrency);
         } catch (IOException e) {
             logger.error("Unable to initialize AIO", e);
         }
