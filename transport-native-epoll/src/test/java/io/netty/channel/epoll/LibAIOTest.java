@@ -43,6 +43,7 @@ public class LibAIOTest {
 
     @Test
     public void globalFlagTest() {
+        Epoll.ensureAvailability();
         Assert.assertTrue(Aio.isAvailable());
     }
 

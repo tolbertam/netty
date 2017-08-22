@@ -78,7 +78,12 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     private volatile int ioRatio = 50;
 
     protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
-                   SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
+                             SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
+        this(parent, executor, maxEvents, strategy, rejectedExecutionHandler, false);
+    }
+
+    protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
+                   SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler, boolean aioSupport) {
         super(parent, executor, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);
         selectStrategy = ObjectUtil.checkNotNull(strategy, "strategy");
         if (maxEvents == 0) {
@@ -94,10 +99,12 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         AIOContext aioContext = null;
         this.epollFd = epollFd = Native.newEpollCreate();
         this.eventFd = eventFd = Native.newEventFd();
-        try {
-            aioContext = Native.createAIOContext(aioMaxConcurrency);
-        } catch (IOException e) {
-            logger.error("Unable to initialize AIO", e);
+        if (aioSupport && Aio.isAvailable()) {
+            try {
+                aioContext = Native.createAIOContext(aioMaxConcurrency);
+            } catch (IOException e) {
+                logger.error("Unable to initialize AIO", e);
+            }
         }
         this.aioContext = aioContext;
 
