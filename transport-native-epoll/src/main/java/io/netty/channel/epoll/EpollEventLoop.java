@@ -100,7 +100,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         this.eventFd = eventFd = Native.newEventFd();
         try {
             aioContext = Native.createAIOContext(aioMaxConcurrency);
-        } catch (IOException e) {
+        } catch (Throwable e) {
             logger.error("Unable to initialize AIO", e);
         }
         this.aioContext = aioContext;
