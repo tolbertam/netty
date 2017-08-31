@@ -22,15 +22,23 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.AsynchronousFileChannel;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
+
+import org.apache.commons.lang3.tuple.ImmutablePair;
 
 import io.netty.util.SuppressForbidden;
 import org.junit.Assert;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import io.netty.channel.EventLoopGroup;
@@ -40,6 +48,11 @@ import sun.misc.SharedSecrets;
 
 
 public class LibAIOTest {
+
+    @BeforeClass
+    public static void setup() {
+        System.setProperty("netty.aio.maxConcurrency", "1");
+    }
 
     @Test
     public void globalFlagTest() {
@@ -70,29 +83,72 @@ public class LibAIOTest {
 
         EpollEventLoop loop = (EpollEventLoop) group.next();
 
-        AIOContext aio = Native.createAIOContext(10);
-        ByteBuffer buf = allocateAlignedByteBuffer(65536, 512);
+            AIOContext aio = Native.createAIOContext(1, 1);
 
-        long id = Native.submitAIORead(aio, loop.eventFd.intValue(),
-                                       SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
-                                       0, 65536, buf);
+            try {
+            ByteBuffer buf = allocateAlignedByteBuffer(65536, 512);
 
-        long[] ids = Native.getAIOEvents(aio, 1);
+            long id = Native.submitAIORead(aio, loop.eventFd.intValue(),
+                                           SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
+                                           0, 65536, buf);
 
-        Assert.assertEquals(id, ids[0]);
-        byte[] output = new byte[value.length()];
-        buf.get(output);
-        Assert.assertEquals(value, new String(output));
+            long[] ids = Native.getAIOEvents(aio, 1);
 
-        group.shutdownGracefully();
+            Assert.assertEquals(id, ids[0]);
+            byte[] output = new byte[value.length()];
+            buf.get(output);
+            Assert.assertEquals(value, new String(output));
+
+            group.shutdownGracefully();
+        } finally {
+            aio.destroy();
+        }
     }
 
     @Test
     public void epollTriggeredReadTest() throws IOException, InterruptedException, ExecutionException {
+        Collection<Exception> errors = epollTriggeredReadTest(1024, 16, 8);
+        Assert.assertTrue(errors.isEmpty());
+    }
+
+    @Test
+    public void epollTriggeredReadTestHigherConcurrency() throws IOException, InterruptedException, ExecutionException {
+        int old = EpollEventLoop.aioMaxConcurrency;
+        try {
+            EpollEventLoop.aioMaxConcurrency = 128;
+            Collection<Exception> errors = epollTriggeredReadTest(1024, 16, 8);
+            Assert.assertTrue(errors.isEmpty());
+        } finally {
+            EpollEventLoop.aioMaxConcurrency = old;
+        }
+    }
+
+    @Test
+    public void epollTriggeredReadTestLowMaxPending() throws IOException, InterruptedException, ExecutionException {
+        int oldConcurrency = EpollEventLoop.aioMaxConcurrency;
+        int oldPedning = EpollEventLoop.aioPerLoopMaxPending;
+
+        try {
+            EpollEventLoop.aioMaxConcurrency = 128;
+            EpollEventLoop.aioPerLoopMaxPending = 32;
+            Collection<Exception> errors = epollTriggeredReadTest(1024, 8, 4);
+            Assert.assertFalse(errors.isEmpty()); // some requests should have failed with "Too many pending requests"
+            for (Exception error : errors) {
+                Assert.assertNotNull(error);
+                Assert.assertTrue(error.getMessage().contains("Too many pending requests"));
+            }
+        } finally {
+            EpollEventLoop.aioMaxConcurrency = oldConcurrency;
+            EpollEventLoop.aioPerLoopMaxPending = oldPedning;
+        }
+    }
+
+    private Collection<Exception> epollTriggeredReadTest(final int requests, final int numThreads, final int numLoops)
+            throws IOException, InterruptedException {
         final int LEN = 65536;
-        final EventLoopGroup group = new EpollEventLoopGroup(8).next();
-        final EpollEventLoop[] loops = new EpollEventLoop[8];
-        for (int i = 0; i < 8; i++) {
+        final EventLoopGroup group = new EpollEventLoopGroup(numLoops, true);
+        final EpollEventLoop[] loops = new EpollEventLoop[numLoops];
+        for (int i = 0; i < numLoops; i++) {
             loops[i] = (EpollEventLoop) group.next();
         }
 
@@ -108,45 +164,57 @@ public class LibAIOTest {
         }
 
         final String value = tmp.substring(0, LEN);
-
         FileWriter write = new FileWriter(file);
-        for (int i = 0; i < 1024; i++) {
+        for (int i = 0; i < requests; i++) {
             write.append(value);
         }
 
         write.flush();
         write.close();
 
-        int THREADS = 64;
         final AtomicReference<Throwable> err = new AtomicReference<Throwable>();
-        ExecutorService es = Executors.newFixedThreadPool(THREADS);
-        final CountDownLatch latch = new CountDownLatch(THREADS);
+        ExecutorService es = Executors.newFixedThreadPool(numThreads);
+        final CountDownLatch latch = new CountDownLatch(numThreads);
+        final BlockingQueue<Exception> errors = new LinkedBlockingQueue<Exception>();
 
-        for (int i = 0; i < THREADS; i++) {
+        for (int i = 0; i < numThreads; i++) {
             final int tid = i;
             es.submit(new Runnable() {
                 public void run() {
                     int idx = 0;
                     try {
-                        final EpollEventLoop loop = loops[tid % 8];
+                        final EpollEventLoop loop = loops[tid % numLoops];
 
                         AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop, FileDescriptor.O_RDONLY |
                                                                              FileDescriptor.O_DIRECT);
-                        ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
-                        for (int i = 0; i < 1024; i++) {
+                        List<ImmutablePair<ByteBuffer, Future<Integer>>> futures =
+                            new ArrayList<ImmutablePair<ByteBuffer, Future<Integer>>>();
+
+                        for (int i = 0; i < requests; i++) {
                             //System.err.println(loop.threadProperties().name());
+                            ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
 
                             buf.clear();
-                            idx = i;
-                            Future<Integer> f = fc.read(buf, value.length() * (i % 1024));
-                            int len = f.get();
-                            buf.flip();
-                            Assert.assertEquals(buf.position(), 0);
-                            Assert.assertEquals(buf.limit(), len);
+                            futures.add(new ImmutablePair<ByteBuffer,
+                                                         Future<Integer>>(buf, fc.read(buf,
+                                                                                       value.length() *
+                                                                                       (i % requests))));
+                        }
 
-                            byte[] output = new byte[value.length()];
-                            buf.get(output);
-                            Assert.assertEquals(value, new String(output));
+                        for (int i = 0; i < requests; i++) {
+                            try {
+                                int len = futures.get(i).getRight().get();
+                                ByteBuffer buf = futures.get(i).getLeft();
+                                buf.flip();
+                                Assert.assertEquals(buf.position(), 0);
+                                Assert.assertEquals(buf.limit(), len);
+
+                                byte[] output = new byte[value.length()];
+                                buf.get(output);
+                                Assert.assertEquals(value, new String(output));
+                            } catch (Exception ex) {
+                                errors.add(ex); // exceptions when completing the future are handled by the callers
+                            }
                         }
                     } catch (Throwable t) {
                         System.err.println("Thread: " + tid + ", Index: " + idx);
@@ -162,6 +230,8 @@ public class LibAIOTest {
         latch.await();
         Assert.assertNull(err.get());
         group.shutdownGracefully();
+
+        return errors;
     }
 
     public static ByteBuffer allocateAlignedByteBuffer(int capacity, long align) {

@@ -20,8 +20,10 @@ import java.io.IOError;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
+import java.util.ArrayDeque;
 import java.util.Map;
 
+import io.netty.channel.ChannelException;
 import io.netty.util.collection.LongObjectHashMap;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -31,12 +33,18 @@ public class AIOContext {
 
     private final long address;
     private long nextId;
+    private final int maxOutstanding;
+    private final int maxPending;
     private final Map<Long, IORequest> outstandingRequests;
+    private final ArrayDeque<IORequest> pendingRequests;
     private volatile boolean destroyed;
 
-    public AIOContext(long address) {
+    AIOContext(long address, int maxOutstanding, int maxPending) {
         this.address = address;
-        this.outstandingRequests = new LongObjectHashMap<IORequest>(128);
+        this.maxOutstanding = maxOutstanding;
+        this.maxPending = maxPending;
+        this.outstandingRequests = new LongObjectHashMap<IORequest>(maxOutstanding);
+        this.pendingRequests = new ArrayDeque<IORequest>(maxPending);
         this.nextId = 0;
     }
 
@@ -60,45 +68,62 @@ public class AIOContext {
     public <A> void read(final AIOEpollFileChannel file, final ByteBuffer dst, final long position, final A attachment,
                          final CompletionHandler<Integer, ? super A> handler) {
         assert !destroyed;
-        assert dst.isDirect();
-        assert dst.position() == 0;
+        assert file.epollEventLoop.aioContext == this;
 
-        int length = dst.limit();
+        if (!file.verify(dst, position, attachment, handler)) {
+            return;
+        }
+
+        int length = (dst.limit() & AIOEpollFileChannel.SECTOR_SIZE_MASK) == 0 ? dst.limit() :
+                     ((dst.limit() + AIOEpollFileChannel.SECTOR_SIZE_MASK) & ~AIOEpollFileChannel.SECTOR_SIZE_MASK);
+        IORequest<A> request = new IORequest<A>(file, dst, position, length, handler, attachment);
+
         try {
-            if (file.isDirect()) {
-                length = (dst.limit() & 511) == 0 ? dst.limit() : ((dst.limit() + 511) & ~511);
-                if (dst.capacity() < length) {
-                    throw new RuntimeException("supplied buffer isn't long enough to handle read length alignment");
-                }
+            // Avoid sending overflowing the aio context queue (EAGAIN)
+            // instead buffer locally
+            if (outstandingRequests.size() < maxOutstanding) {
+                long id = Native.submitAIORead(this, file.getEventFd(), file.getFd(), position, length, dst);
 
-                if ((position & 511) != 0) {
-                    throw new IOException("Read position must be aligned to sector size (usually 512)");
+                IORequest r = outstandingRequests.putIfAbsent(id, request);
+                if (r != null) {
+                    handler.failed(new RuntimeException("ID already found: " + id), attachment);
                 }
-            }
-            long id = Native.submitAIORead(this, file.getEventFd(), file.getFd(), position, length, dst);
-
-            IORequest r = outstandingRequests.putIfAbsent(id, new IORequest<A>(dst, position, length, handler,
-                                                                               attachment));
-            if (r != null) {
-                handler.failed(new RuntimeException("ID already found: " + id), attachment);
+            } else {
+                addToPending(request, attachment, handler);
             }
         } catch (Throwable e) {
-            logger.error("Error reading " + file.getFileObject().getAbsolutePath() + "@" + position, e);
-            handler.failed(e, attachment);
+            if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
+                addToPending(request, attachment, handler);
+            } else {
+                logger.error("Error reading " + file.getFileObject().getAbsolutePath() + "@" + position, e);
+                handler.failed(e, attachment);
+            }
         }
+    }
+
+    private <A> void addToPending(final IORequest<A> request, final A attachment,
+                                     final CompletionHandler<Integer, ? super A> handler)
+    {
+        if (pendingRequests.size() >= maxPending) {
+            handler.failed(new RuntimeException("Too many pending requests"), attachment);
+        }
+        boolean added = pendingRequests.offer(request);
+        assert added : "failed to add request";
     }
 
     public void processReady(AIOEpollFileChannel file) {
         assert !destroyed;
         IORequest request = null;
+        long numReady;
         try {
-            long numReady = Native.eventFdRead(file.getEventFd());
+            numReady = Native.eventFdRead(file.getEventFd());
 
-            //Shouldn't happen
+            // Shouldn't happen
             if (numReady == 0) {
                 return;
             }
 
+            // Process the finished reads
             long[] ids = Native.getAIOEvents(this, numReady);
             assert ids.length == numReady * 2;
             for (int i = 0; i < numReady; i++) {
@@ -109,6 +134,7 @@ public class AIOContext {
                     throw new IllegalStateException("" + id + " missing");
                 }
 
+                // Finally complete the request
                 int len = (int) lengthRead;
                 assert len == lengthRead;
                 assert len >= 0 : len;
@@ -125,16 +151,49 @@ public class AIOContext {
                          length, t);
             throw new RuntimeException(t);
         }
+
+        // We do this after processing the finished reads in case any outstanding reads
+        // share the same destination buffer
+        addPendingReads(numReady);
+    }
+
+    public void addPendingReads(long numReady) {
+        for (int i = 0; i < numReady; i++) {
+            IORequest req = null;
+            try {
+                if (outstandingRequests.size() >= maxOutstanding || (req = pendingRequests.poll()) == null) {
+                    break; // too many outstanding requests or no more pending requests
+                }
+                long nextId = Native.submitAIORead(this, req.file.getEventFd(), req.file.getFd(),
+                        req.position, req.length, req.buffer);
+                IORequest r = outstandingRequests.putIfAbsent(nextId, req);
+                if (r != null) {
+                    req.handler.failed(new RuntimeException("ID already found: " + nextId), req.attachment);
+                }
+
+            } catch (ChannelException e) {
+                if (req != null && e.getMessage().contains("Resource temporarily unavailable")) {
+                    pendingRequests.addFirst(req);
+                } else {
+                    throw e;
+                }
+            } catch (IOException e) {
+                throw new IOError(e);
+            }
+        }
     }
 
     class IORequest<A> {
+        public final AIOEpollFileChannel file;
         public final ByteBuffer buffer;
         public final CompletionHandler handler;
         public final A attachment;
         public final long position;
         public final int length;
 
-        IORequest(ByteBuffer buffer, long position, int length, CompletionHandler handler, A attachment) {
+        IORequest(AIOEpollFileChannel file, ByteBuffer buffer, long position, int length, CompletionHandler handler,
+                  A attachment) {
+            this.file = file;
             this.buffer = buffer;
             this.position = position;
             this.length = length;
