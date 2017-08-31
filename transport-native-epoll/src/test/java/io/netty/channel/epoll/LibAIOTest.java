@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.AsynchronousFileChannel;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -70,27 +72,32 @@ public class LibAIOTest {
 
         EpollEventLoop loop = (EpollEventLoop) group.next();
 
-        AIOContext aio = Native.createAIOContext(10);
-        ByteBuffer buf = allocateAlignedByteBuffer(65536, 512);
+            AIOContext aio = Native.createAIOContext(1);
 
-        long id = Native.submitAIORead(aio, loop.eventFd.intValue(),
-                                       SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
-                                       0, 65536, buf);
+            try {
+            ByteBuffer buf = allocateAlignedByteBuffer(65536, 512);
 
-        long[] ids = Native.getAIOEvents(aio, 1);
+            long id = Native.submitAIORead(aio, loop.eventFd.intValue(),
+                                           SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
+                                           0, 65536, buf);
 
-        Assert.assertEquals(id, ids[0]);
-        byte[] output = new byte[value.length()];
-        buf.get(output);
-        Assert.assertEquals(value, new String(output));
+            long[] ids = Native.getAIOEvents(aio, 1);
 
-        group.shutdownGracefully();
+            Assert.assertEquals(id, ids[0]);
+            byte[] output = new byte[value.length()];
+            buf.get(output);
+            Assert.assertEquals(value, new String(output));
+
+            group.shutdownGracefully();
+        } finally {
+            aio.destroy();
+        }
     }
 
     @Test
     public void epollTriggeredReadTest() throws IOException, InterruptedException, ExecutionException {
         final int LEN = 65536;
-        final EventLoopGroup group = new EpollEventLoopGroup(8).next();
+        final EventLoopGroup group = new EpollEventLoopGroup(8, true);
         final EpollEventLoop[] loops = new EpollEventLoop[8];
         for (int i = 0; i < 8; i++) {
             loops[i] = (EpollEventLoop) group.next();
@@ -117,7 +124,7 @@ public class LibAIOTest {
         write.flush();
         write.close();
 
-        int THREADS = 64;
+        int THREADS = 8;
         final AtomicReference<Throwable> err = new AtomicReference<Throwable>();
         ExecutorService es = Executors.newFixedThreadPool(THREADS);
         final CountDownLatch latch = new CountDownLatch(THREADS);
@@ -132,21 +139,18 @@ public class LibAIOTest {
 
                         AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop, FileDescriptor.O_RDONLY |
                                                                              FileDescriptor.O_DIRECT);
-                        ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
+                        List<Future<Integer>> futures = new ArrayList<Future<Integer>>();
+
                         for (int i = 0; i < 1024; i++) {
                             //System.err.println(loop.threadProperties().name());
+                            ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
 
                             buf.clear();
-                            idx = i;
-                            Future<Integer> f = fc.read(buf, value.length() * (i % 1024));
-                            int len = f.get();
-                            buf.flip();
-                            Assert.assertEquals(buf.position(), 0);
-                            Assert.assertEquals(buf.limit(), len);
+                            futures.add(fc.read(buf, value.length() * (i % 1024)));
+                        }
 
-                            byte[] output = new byte[value.length()];
-                            buf.get(output);
-                            Assert.assertEquals(value, new String(output));
+                        for (int i = 0; i < 1024; i++) {
+                            futures.get(i).get();
                         }
                     } catch (Throwable t) {
                         System.err.println("Thread: " + tid + ", Index: " + idx);

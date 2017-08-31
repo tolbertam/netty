@@ -20,8 +20,10 @@ import java.io.IOError;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
+import java.util.ArrayDeque;
 import java.util.Map;
 
+import io.netty.channel.ChannelException;
 import io.netty.util.collection.LongObjectHashMap;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -31,12 +33,18 @@ public class AIOContext {
 
     private final long address;
     private long nextId;
+    private long outstanding;
+    private long maxOutstanding;
     private final Map<Long, IORequest> outstandingRequests;
+    private final ArrayDeque<IORequest> pendingRequests;
     private volatile boolean destroyed;
 
-    public AIOContext(long address) {
+    AIOContext(long address, long maxOutstanding) {
         this.address = address;
+        this.outstanding = 0;
+        this.maxOutstanding = maxOutstanding;
         this.outstandingRequests = new LongObjectHashMap<IORequest>(128);
+        this.pendingRequests = new ArrayDeque<IORequest>(1 << 16);
         this.nextId = 0;
     }
 
@@ -64,27 +72,49 @@ public class AIOContext {
         assert dst.position() == 0;
 
         int length = dst.limit();
-        try {
-            if (file.isDirect()) {
-                length = (dst.limit() & 511) == 0 ? dst.limit() : ((dst.limit() + 511) & ~511);
-                if (dst.capacity() < length) {
-                    throw new RuntimeException("supplied buffer isn't long enough to handle read length alignment");
-                }
 
-                if ((position & 511) != 0) {
-                    throw new IOException("Read position must be aligned to sector size (usually 512)");
-                }
+        if (file.isDirect()) {
+            length = (dst.limit() & 511) == 0 ? dst.limit() : ((dst.limit() + 511) & ~511);
+            if (dst.capacity() < length) {
+                handler.failed(new RuntimeException("supplied buffer isn't long enough to handle read length " +
+                                                    "alignment"), attachment);
+                return;
             }
-            long id = Native.submitAIORead(this, file.getEventFd(), file.getFd(), position, length, dst);
 
-            IORequest r = outstandingRequests.putIfAbsent(id, new IORequest<A>(dst, position, length, handler,
-                                                                               attachment));
-            if (r != null) {
-                handler.failed(new RuntimeException("ID already found: " + id), attachment);
+            if ((position & 511) != 0) {
+                handler.failed(new IOException("Read position must be aligned to sector size (usually 512)"),
+                               attachment);
+                return;
+            }
+        }
+
+        IORequest<A> request = new IORequest<A>(dst, position, length, handler, attachment);
+
+        try {
+            // Avoid sending overflowing the aio context queue (EGAIN)
+            // instead buffer locally
+            if (outstanding + 1 <= maxOutstanding) {
+                long id = Native.submitAIORead(this, file.getEventFd(), file.getFd(), position, length, dst);
+
+                IORequest r = outstandingRequests.putIfAbsent(id, request);
+                ++outstanding;
+                if (r != null) {
+                    handler.failed(new RuntimeException("ID already found: " + id), attachment);
+                }
+            } else {
+                if (!pendingRequests.offer(request)) {
+                    handler.failed(new RuntimeException("Too many pending requests"), attachment);
+                }
             }
         } catch (Throwable e) {
-            logger.error("Error reading " + file.getFileObject().getAbsolutePath() + "@" + position, e);
-            handler.failed(e, attachment);
+            if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
+                if (!pendingRequests.offer(request)) {
+                    handler.failed(new RuntimeException("Too many pending requests"), attachment);
+                }
+            } else {
+                logger.error("Error reading " + file.getFileObject().getAbsolutePath() + "@" + position, e);
+                handler.failed(e, attachment);
+            }
         }
     }
 
@@ -99,6 +129,29 @@ public class AIOContext {
                 return;
             }
 
+            //First add any pending reads
+            for (int i = 0; i < numReady; i++) {
+                --outstanding;
+                IORequest req = null;
+                // Push any pending requests if we have room
+                try {
+                    if (outstanding + 1 <= maxOutstanding && (req = pendingRequests.poll()) != null) {
+                        long nextId = Native.submitAIORead(this, file.getEventFd(), file.getFd(),
+                                                           req.position, req.length, req.buffer);
+                        IORequest r = outstandingRequests.putIfAbsent(nextId, req);
+                        assert r == null;
+                        ++outstanding;
+                    }
+                } catch (ChannelException e) {
+                    if (req != null && e.getMessage().contains("Resource temporarily unavailable")) {
+                        pendingRequests.addFirst(req);
+                    } else {
+                        throw e;
+                    }
+                }
+            }
+
+            //Process the finished reads
             long[] ids = Native.getAIOEvents(this, numReady);
             assert ids.length == numReady * 2;
             for (int i = 0; i < numReady; i++) {
@@ -109,6 +162,7 @@ public class AIOContext {
                     throw new IllegalStateException("" + id + " missing");
                 }
 
+                // Finally complete the request
                 int len = (int) lengthRead;
                 assert len == lengthRead;
                 assert len >= 0 : len;

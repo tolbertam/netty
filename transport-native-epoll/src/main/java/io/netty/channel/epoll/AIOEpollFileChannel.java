@@ -173,7 +173,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         return file.isOpen();
     }
 
-    public void close() throws IOException {
+    public void close() {
         Runnable close = new Runnable() {
             public void run() {
                 if (!isOpen()) {
@@ -216,9 +216,11 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
      */
      class EventFileChannel extends AbstractEpollChannel {
 
+        final AIOEpollFileChannel aioChannel;
         EventFileChannel(AIOEpollFileChannel aioChannel) {
             super(new LinuxSocket(aioChannel.eventFd.intValue()), Native.EPOLLIN | Native.EPOLLET);
             this.eventLoop = epollEventLoop;
+            this.aioChannel = aioChannel;
         }
 
         public void processReady() {

@@ -49,7 +49,9 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     protected static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
 
-    private static final Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 1024);
+    private static final Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency",
+                                                                        1024 / Runtime.getRuntime()
+                                                                                      .availableProcessors());
     static {
         // Ensure JNI is initialized by the time this class is loaded by this time!
         // We use unix-common methods in this class which are backed by JNI methods.
@@ -106,6 +108,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         if (aioSupport && Aio.isAvailable()) {
             try {
                 aioContext = Native.createAIOContext(aioMaxConcurrency);
+                logger.info("Create AIO Context with queue size of {}", aioMaxConcurrency);
             } catch (Throwable e) {
                 logger.error("Unable to initialize AIO", e);
             }
@@ -144,6 +147,13 @@ public class EpollEventLoop extends SingleThreadEventLoop {
                 if (timerFd != null) {
                     try {
                         timerFd.close();
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
+                if (aioContext != null) {
+                    try {
+                        aioContext.destroy();
                     } catch (Exception e) {
                         // ignore
                     }
@@ -373,7 +383,11 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         }
 
         for (AbstractEpollChannel ch: array) {
-            ch.unsafe().close(ch.unsafe().voidPromise());
+            if (ch instanceof AIOEpollFileChannel.EventFileChannel) {
+                ((AIOEpollFileChannel.EventFileChannel) ch).aioChannel.close();
+            } else {
+                ch.unsafe().close(ch.unsafe().voidPromise());
+            }
         }
     }
 
@@ -468,6 +482,9 @@ public class EpollEventLoop extends SingleThreadEventLoop {
             // release native memory
             iovArray.release();
             events.free();
+            if (aioContext != null) {
+                aioContext.destroy();
+            }
         }
     }
 }

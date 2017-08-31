@@ -191,7 +191,7 @@ public final class Native {
     // libaio related
     public static AIOContext createAIOContext(int maxConcurrency) throws IOException {
         long ctxAddress = createAIOContext0(maxConcurrency);
-        return new AIOContext(ctxAddress);
+        return new AIOContext(ctxAddress, maxConcurrency);
     }
 
     public static void destroyAIOContext(AIOContext ctx) {
