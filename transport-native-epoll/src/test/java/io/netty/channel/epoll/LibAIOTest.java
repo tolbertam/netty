@@ -31,8 +31,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.commons.lang3.tuple.ImmutablePair;
+
 import io.netty.util.SuppressForbidden;
 import org.junit.Assert;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import io.netty.channel.EventLoopGroup;
@@ -42,6 +45,11 @@ import sun.misc.SharedSecrets;
 
 
 public class LibAIOTest {
+
+    @BeforeClass
+    public static void setup() {
+        System.setProperty("netty.aio.maxConcurrency", "1");
+    }
 
     @Test
     public void globalFlagTest() {
@@ -124,7 +132,7 @@ public class LibAIOTest {
         write.flush();
         write.close();
 
-        int THREADS = 8;
+        int THREADS = 16;
         final AtomicReference<Throwable> err = new AtomicReference<Throwable>();
         ExecutorService es = Executors.newFixedThreadPool(THREADS);
         final CountDownLatch latch = new CountDownLatch(THREADS);
@@ -139,18 +147,29 @@ public class LibAIOTest {
 
                         AsynchronousFileChannel fc = new AIOEpollFileChannel(file, loop, FileDescriptor.O_RDONLY |
                                                                              FileDescriptor.O_DIRECT);
-                        List<Future<Integer>> futures = new ArrayList<Future<Integer>>();
+                        List<ImmutablePair<ByteBuffer, Future<Integer>>> futures =
+                            new ArrayList<ImmutablePair<ByteBuffer, Future<Integer>>>();
 
                         for (int i = 0; i < 1024; i++) {
                             //System.err.println(loop.threadProperties().name());
                             ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
 
                             buf.clear();
-                            futures.add(fc.read(buf, value.length() * (i % 1024)));
+                            futures.add(new ImmutablePair<ByteBuffer,
+                                                         Future<Integer>>(buf, fc.read(buf,
+                                                                                       value.length() * (i % 1024))));
                         }
 
                         for (int i = 0; i < 1024; i++) {
-                            futures.get(i).get();
+                            int len = futures.get(i).getRight().get();
+                            ByteBuffer buf = futures.get(i).getLeft();
+                            buf.flip();
+                            Assert.assertEquals(buf.position(), 0);
+                            Assert.assertEquals(buf.limit(), len);
+
+                            byte[] output = new byte[value.length()];
+                            buf.get(output);
+                            Assert.assertEquals(value, new String(output));
                         }
                     } catch (Throwable t) {
                         System.err.println("Thread: " + tid + ", Index: " + idx);

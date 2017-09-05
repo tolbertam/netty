@@ -30,6 +30,7 @@ import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import org.jctools.queues.SpscGrowableArrayQueue;
 
 
 public class AIOEpollFileChannel extends AsynchronousFileChannel {
@@ -38,7 +39,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     private final File fileObject;
     private final FileDescriptor file;
     private final FileDescriptor eventFd;
-    private final EpollEventLoop epollEventLoop;
+    final EpollEventLoop epollEventLoop;
     private final EventFileChannel nettyChannel;
     private final boolean isDirect;
 
