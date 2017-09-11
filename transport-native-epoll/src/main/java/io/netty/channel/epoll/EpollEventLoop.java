@@ -25,6 +25,7 @@ import io.netty.channel.unix.IovArray;
 import io.netty.util.IntSupplier;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
+import io.netty.util.concurrent.MultithreadEventExecutorGroup;
 import io.netty.util.concurrent.RejectedExecutionHandler;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.PlatformDependent;
@@ -34,6 +35,7 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
@@ -49,9 +51,10 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     protected static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
 
-    private static final Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency",
-                                                                        1024 / Runtime.getRuntime()
-                                                                                      .availableProcessors());
+    // Represents the total number of outstanding aio requests across all eventloops.
+    // This number will be split evenly among all EventLoopGroup children
+    private static final Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 128);
+
     static {
         // Ensure JNI is initialized by the time this class is loaded by this time!
         // We use unix-common methods in this class which are backed by JNI methods.
@@ -105,10 +108,12 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         AIOContext aioContext = null;
         this.epollFd = epollFd = Native.newEpollCreate();
         this.eventFd = eventFd = Native.newEventFd();
+        int perLoopMaxConcurrency = Math.max(1, aioMaxConcurrency /
+                                                ((MultithreadEventExecutorGroup) parent).executorCount());
         if (aioSupport && Aio.isAvailable()) {
             try {
-                aioContext = Native.createAIOContext(aioMaxConcurrency);
-                logger.info("Create AIO Context with queue size of {}", aioMaxConcurrency);
+                aioContext = Native.createAIOContext(perLoopMaxConcurrency);
+                logger.info("Create AIO Context with queue size of {}", perLoopMaxConcurrency);
             } catch (Throwable e) {
                 logger.error("Unable to initialize AIO", e);
             }
@@ -168,6 +173,19 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     IovArray cleanArray() {
         iovArray.clear();
         return iovArray;
+    }
+
+    /**
+     * count the number of items in a iterator
+     */
+    private static int iteratorSize(Iterator it) {
+        int i = 0;
+        while (it.hasNext()) {
+            it.next();
+            ++i;
+        }
+
+        return i;
     }
 
     @Override

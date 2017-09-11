@@ -36,6 +36,8 @@ import org.jctools.queues.SpscGrowableArrayQueue;
 public class AIOEpollFileChannel extends AsynchronousFileChannel {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AIOEpollFileChannel.class);
 
+    static final int SECTOR_SIZE = 512;
+    static final int SECTOR_SIZE_MASK = SECTOR_SIZE - 1;
     private final File fileObject;
     private final FileDescriptor file;
     private final FileDescriptor eventFd;
@@ -113,25 +115,50 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         throw new UnsupportedOperationException();
     }
 
-    public <A> void read(final ByteBuffer dst, final long position, final A attachment,
-                         final CompletionHandler<Integer, ? super A> handler) {
+    <A> boolean verify(ByteBuffer dst, long position, final A attachment,
+                    final CompletionHandler<Integer, ? super A> handler) {
         if (!isOpen()) {
             handler.failed(new IOException("File has been closed"), attachment);
-            return;
+            return false;
         }
 
         if (!dst.isDirect()) {
             handler.failed(new IllegalArgumentException("ByteBuffer is not direct"), attachment);
-            return;
+            return false;
         }
 
         if (dst.position() != 0) {
             handler.failed(new IllegalArgumentException("ByteBuffer position must be 0"), attachment);
-            return;
+            return false;
         }
 
         if (position < 0) {
             handler.failed(new IllegalArgumentException("Position must be >= 0"), attachment);
+            return false;
+        }
+
+        int length = (dst.limit() & SECTOR_SIZE_MASK) == 0 ? dst.limit() :
+                     ((dst.limit() + SECTOR_SIZE_MASK) & ~SECTOR_SIZE_MASK);
+        if (dst.capacity() < length) {
+            handler.failed(new RuntimeException("supplied buffer isn't long enough to handle read length " +
+                                                "alignment"), attachment);
+            return false;
+        }
+
+        if ((position & SECTOR_SIZE_MASK) != 0) {
+            handler.failed(new IOException("Read position must be aligned to sector size (usually 512)"),
+                           attachment);
+            return false;
+        }
+
+        return true;
+    }
+
+    public <A> void read(final ByteBuffer dst, final long position, final A attachment,
+                         final CompletionHandler<Integer, ? super A> handler) {
+
+        if (!verify(dst, position, attachment, handler)) {
+            return;
         }
 
         Runnable action = new Runnable() {
@@ -187,15 +214,9 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
                     throw new IOError(e);
                 } finally {
                     try {
-                        eventFd.close();
-                    } catch (IOException e) {
-                        logger.trace("Error closing eventFd", e);
-                    }
-
-                    try {
                         file.close();
                     } catch (IOException e) {
-                        logger.trace("Error closing file", e);
+                        logger.error("Error closing file", e);
                     }
                 }
             }

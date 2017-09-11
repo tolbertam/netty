@@ -123,9 +123,9 @@ public class LibAIOTest {
         }
 
         final String value = tmp.substring(0, LEN);
-
+        final int requests = 1024;
         FileWriter write = new FileWriter(file);
-        for (int i = 0; i < 1024; i++) {
+        for (int i = 0; i < requests; i++) {
             write.append(value);
         }
 
@@ -150,17 +150,18 @@ public class LibAIOTest {
                         List<ImmutablePair<ByteBuffer, Future<Integer>>> futures =
                             new ArrayList<ImmutablePair<ByteBuffer, Future<Integer>>>();
 
-                        for (int i = 0; i < 1024; i++) {
+                        for (int i = 0; i < requests; i++) {
                             //System.err.println(loop.threadProperties().name());
                             ByteBuffer buf = allocateAlignedByteBuffer(LEN, 512);
 
                             buf.clear();
                             futures.add(new ImmutablePair<ByteBuffer,
                                                          Future<Integer>>(buf, fc.read(buf,
-                                                                                       value.length() * (i % 1024))));
+                                                                                       value.length() *
+                                                                                       (i % requests))));
                         }
 
-                        for (int i = 0; i < 1024; i++) {
+                        for (int i = 0; i < requests; i++) {
                             int len = futures.get(i).getRight().get();
                             ByteBuffer buf = futures.get(i).getLeft();
                             buf.flip();

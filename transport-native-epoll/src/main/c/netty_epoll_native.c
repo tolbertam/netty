@@ -433,12 +433,17 @@ static void netty_epoll_native_submitAIORead0(JNIEnv* env, jclass clazz, jlong c
 
     io_context_t *ctx = (io_context_t *) ctxaddress;
 
-    if (bufaddress % 512 != 0) {
+    if (bufaddress & 511 != 0) {
        netty_unix_errors_throwRuntimeException(env, "buffer is not memory aligned");
        return;
     }
 
     struct netty_iocb *niocbp = malloc(sizeof(struct netty_iocb));
+    if (niocbp == NULL) {
+        netty_unix_errors_throwRuntimeException(env, "io_submit() failed: malloc error");
+        return;
+    }
+
     struct iocb *iocbp = &niocbp->iocb;
 
     io_prep_pread(iocbp, fd, (void *)bufaddress, length, offset);
@@ -454,41 +459,34 @@ static void netty_epoll_native_submitAIORead0(JNIEnv* env, jclass clazz, jlong c
 static void netty_epoll_native_getAIOEvents0(JNIEnv* env, jclass clazz, jlong ctxaddress, jlong num_events, jlongArray keys)
 {
     io_context_t *ctx = (io_context_t *) ctxaddress;
-    struct timespec tms;
     struct io_event events[num_events];
     unsigned long keysArray[num_events * 2];
 
     int r,j;
-    long i = 0;
-    while (i < num_events) {
-        tms.tv_sec = 0;
-        tms.tv_nsec = 0;
-        r = io_getevents(*ctx, 1, num_events - i, events, &tms);
-        if (r > 0) {
-            for (j = 0; j < r; ++j, ++i) {
-                struct io_event event = events[j];
-                struct netty_iocb* niocb = (struct netty_iocb *) event.obj;
+    r = io_getevents(*ctx, num_events, num_events, events, NULL);
+    if (r > 0) {
+        for (j = 0; j < r; ++j) {
+           struct io_event event = events[j];
+           struct netty_iocb* niocb = (struct netty_iocb *) event.obj;
 
-                if (((long)event.res2) != 0) {
-                    netty_unix_errors_throwRuntimeException(env, "io_getevents error res2");
-                    return;
-                }
+           if (((long)event.res2) != 0) {
+               netty_unix_errors_throwRuntimeException(env, "io_getevents error res2");
+               free(niocb);
+               return;
+           }
 
-                if (((long)event.res) < 0) {
-                    netty_unix_errors_throwChannelExceptionErrorNo(env, "io_events() failed to read event: ", event.res);
-                    return;
-                }
+           if (((long)event.res) < 0) {
+               netty_unix_errors_throwChannelExceptionErrorNo(env, "io_events() failed to read event: ", event.res);
+               free(niocb);
+               return;
+           }
 
-                keysArray[(int) i] = (long) niocb->request_key;
-                keysArray[(int) (i + num_events)] = (long) event.res;
-
-                //fprintf(stderr, "Event %ld read: %ld\n", niocb->request_key, (long) event.res);
-
-                free(niocb);
-            }
-        } else {
-           netty_unix_errors_throwChannelExceptionErrorNo(env, "io_getevents() failed: ", r);
-        }
+           keysArray[(int) j] = (long) niocb->request_key;
+           keysArray[(int) (j + num_events)] = (long) event.res;
+           free(niocb);
+         }
+    } else {
+       netty_unix_errors_throwChannelExceptionErrorNo(env, "io_getevents() failed: ", r);
     }
 
     (*env)->SetLongArrayRegion(env, keys, 0, num_events * 2, keysArray);
