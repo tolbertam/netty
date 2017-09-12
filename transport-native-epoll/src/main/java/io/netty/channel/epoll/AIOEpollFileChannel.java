@@ -30,7 +30,6 @@ import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.jctools.queues.SpscGrowableArrayQueue;
 
 
 public class AIOEpollFileChannel extends AsynchronousFileChannel {
@@ -40,7 +39,6 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     static final int SECTOR_SIZE_MASK = SECTOR_SIZE - 1;
     private final File fileObject;
     private final FileDescriptor file;
-    private final FileDescriptor eventFd;
     final EpollEventLoop epollEventLoop;
     private final EventFileChannel nettyChannel;
     private final boolean isDirect;
@@ -52,7 +50,6 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
             throw new IllegalArgumentException("Only supports read-only files");
         }
         this.file = FileDescriptor.from(file, flags);
-        this.eventFd = Native.newEventFd();
         this.epollEventLoop = eventLoop;
         this.nettyChannel = new EventFileChannel(this);
         this.isDirect = flags == FileDescriptor.O_DIRECT;
@@ -75,7 +72,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     }
 
     public int getEventFd() {
-        return eventFd.intValue();
+        return nettyChannel.fd().intValue();
     }
 
     public int getFd() {
@@ -146,8 +143,8 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         }
 
         if ((position & SECTOR_SIZE_MASK) != 0) {
-            handler.failed(new IOException("Read position must be aligned to sector size (usually 512)"),
-                           attachment);
+            handler.failed(new IOException(String.format("Read position must be aligned to sector size (usually %d)",
+                    SECTOR_SIZE)), attachment);
             return false;
         }
 
@@ -240,7 +237,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
         final AIOEpollFileChannel aioChannel;
         EventFileChannel(AIOEpollFileChannel aioChannel) {
-            super(new LinuxSocket(aioChannel.eventFd.intValue()), Native.EPOLLIN | Native.EPOLLET);
+            super(new LinuxSocket(Native.eventFd()), Native.EPOLLIN | Native.EPOLLET);
             this.eventLoop = epollEventLoop;
             this.aioChannel = aioChannel;
         }

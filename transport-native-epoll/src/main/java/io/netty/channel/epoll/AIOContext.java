@@ -33,16 +33,18 @@ public class AIOContext {
 
     private final long address;
     private long nextId;
-    private final long maxOutstanding;
+    private final int maxOutstanding;
+    private final int maxPending;
     private final Map<Long, IORequest> outstandingRequests;
     private final ArrayDeque<IORequest> pendingRequests;
     private volatile boolean destroyed;
 
-    AIOContext(long address, long maxOutstanding) {
+    AIOContext(long address, int maxOutstanding, int maxPending) {
         this.address = address;
         this.maxOutstanding = maxOutstanding;
-        this.outstandingRequests = new LongObjectHashMap<IORequest>(128);
-        this.pendingRequests = new ArrayDeque<IORequest>(1 << 16);
+        this.maxPending = maxPending;
+        this.outstandingRequests = new LongObjectHashMap<IORequest>(maxOutstanding);
+        this.pendingRequests = new ArrayDeque<IORequest>(maxPending);
         this.nextId = 0;
     }
 
@@ -87,15 +89,11 @@ public class AIOContext {
                     handler.failed(new RuntimeException("ID already found: " + id), attachment);
                 }
             } else {
-                if (!pendingRequests.offer(request)) {
-                    handler.failed(new RuntimeException("Too many pending requests"), attachment);
-                }
+                addToPending(request, attachment, handler);
             }
         } catch (Throwable e) {
             if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
-                if (!pendingRequests.offer(request)) {
-                    handler.failed(new RuntimeException("Too many pending requests"), attachment);
-                }
+                addToPending(request, attachment, handler);
             } else {
                 logger.error("Error reading " + file.getFileObject().getAbsolutePath() + "@" + position, e);
                 handler.failed(e, attachment);
@@ -103,10 +101,20 @@ public class AIOContext {
         }
     }
 
+    private <A> void addToPending(final IORequest<A> request, final A attachment,
+                                     final CompletionHandler<Integer, ? super A> handler)
+    {
+        if (pendingRequests.size() >= maxPending) {
+            handler.failed(new RuntimeException("Too many pending requests"), attachment);
+        }
+        boolean added = pendingRequests.offer(request);
+        assert added : "failed to add request";
+    }
+
     public void processReady(AIOEpollFileChannel file) {
         assert !destroyed;
         IORequest request = null;
-        long numReady = 0;
+        long numReady;
         try {
             numReady = Native.eventFdRead(file.getEventFd());
 
@@ -153,14 +161,16 @@ public class AIOContext {
         for (int i = 0; i < numReady; i++) {
             IORequest req = null;
             try {
-                if (outstandingRequests.size() < maxOutstanding && (req = pendingRequests.poll()) != null) {
-                    long nextId = Native.submitAIORead(this, req.file.getEventFd(), req.file.getFd(),
-                                                       req.position, req.length, req.buffer);
-                    IORequest r = outstandingRequests.putIfAbsent(nextId, req);
-                    if (r != null) {
-                        req.handler.failed(new RuntimeException("ID already found: " + nextId), req.attachment);
-                    }
+                if (outstandingRequests.size() >= maxOutstanding || (req = pendingRequests.poll()) == null) {
+                    break; // too many outstanding requests or no more pending requests
                 }
+                long nextId = Native.submitAIORead(this, req.file.getEventFd(), req.file.getFd(),
+                        req.position, req.length, req.buffer);
+                IORequest r = outstandingRequests.putIfAbsent(nextId, req);
+                if (r != null) {
+                    req.handler.failed(new RuntimeException("ID already found: " + nextId), req.attachment);
+                }
+
             } catch (ChannelException e) {
                 if (req != null && e.getMessage().contains("Resource temporarily unavailable")) {
                     pendingRequests.addFirst(req);

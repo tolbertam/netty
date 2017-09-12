@@ -98,7 +98,7 @@ public final class Native {
         return new FileDescriptor(timerFd());
     }
 
-    private static native int eventFd();
+    static native int eventFd();
     private static native int timerFd();
     public static native void eventFdWrite(int fd, long value);
     public static native long eventFdRead(int fd);
@@ -189,9 +189,9 @@ public final class Native {
     public static native int offsetofEpollData();
 
     // libaio related
-    public static AIOContext createAIOContext(int maxConcurrency) throws IOException {
+    public static AIOContext createAIOContext(int maxConcurrency, int maxPending) throws IOException {
         long ctxAddress = createAIOContext0(maxConcurrency);
-        return new AIOContext(ctxAddress, maxConcurrency);
+        return new AIOContext(ctxAddress, maxConcurrency, maxPending);
     }
 
     public static void destroyAIOContext(AIOContext ctx) {

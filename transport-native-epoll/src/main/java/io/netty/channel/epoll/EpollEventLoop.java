@@ -53,7 +53,12 @@ public class EpollEventLoop extends SingleThreadEventLoop {
 
     // Represents the total number of outstanding aio requests across all eventloops.
     // This number will be split evenly among all EventLoopGroup children
-    private static final Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 128);
+    // ONLY CHANGED FOR TESTING!
+    static Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 128);
+
+    // Represents the max number of pending aio requests for each eventloop.
+    // ONLY CHANGED FOR TESTING!
+    static Integer aioPerLoopMaxPending = Integer.getInteger("netty.aio.perLoopMaxPending", 1 << 16);
 
     static {
         // Ensure JNI is initialized by the time this class is loaded by this time!
@@ -108,12 +113,15 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         AIOContext aioContext = null;
         this.epollFd = epollFd = Native.newEpollCreate();
         this.eventFd = eventFd = Native.newEventFd();
-        int perLoopMaxConcurrency = Math.max(1, aioMaxConcurrency /
-                                                ((MultithreadEventExecutorGroup) parent).executorCount());
+
         if (aioSupport && Aio.isAvailable()) {
             try {
-                aioContext = Native.createAIOContext(perLoopMaxConcurrency);
-                logger.info("Create AIO Context with queue size of {}", perLoopMaxConcurrency);
+                int perLoopMaxConcurrency = Math.max(1, aioMaxConcurrency /
+                        ((MultithreadEventExecutorGroup) parent).executorCount());
+
+                aioContext = Native.createAIOContext(perLoopMaxConcurrency, aioPerLoopMaxPending);
+                logger.info("Create AIO Context with queue sizes of (outstanding, pending) requests: ({}, {})",
+                        perLoopMaxConcurrency, aioPerLoopMaxPending);
             } catch (Throwable e) {
                 logger.error("Unable to initialize AIO", e);
             }
