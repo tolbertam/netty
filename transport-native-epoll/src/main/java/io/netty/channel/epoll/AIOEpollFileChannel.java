@@ -31,12 +31,11 @@ import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
+import static io.netty.channel.epoll.AIOContext.Batch;
 
 public class AIOEpollFileChannel extends AsynchronousFileChannel {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AIOEpollFileChannel.class);
 
-    static final int SECTOR_SIZE = 512;
-    static final int SECTOR_SIZE_MASK = SECTOR_SIZE - 1;
     private final File fileObject;
     private final FileDescriptor file;
     final EpollEventLoop epollEventLoop;
@@ -112,55 +111,26 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         throw new UnsupportedOperationException();
     }
 
-    <A> boolean verify(ByteBuffer dst, long position, final A attachment,
-                    final CompletionHandler<Integer, ? super A> handler) {
-        if (!isOpen()) {
-            handler.failed(new IOException("File has been closed"), attachment);
-            return false;
-        }
-
-        if (!dst.isDirect()) {
-            handler.failed(new IllegalArgumentException("ByteBuffer is not direct"), attachment);
-            return false;
-        }
-
-        if (dst.position() != 0) {
-            handler.failed(new IllegalArgumentException("ByteBuffer position must be 0"), attachment);
-            return false;
-        }
-
-        if (position < 0) {
-            handler.failed(new IllegalArgumentException("Position must be >= 0"), attachment);
-            return false;
-        }
-
-        int length = (dst.limit() & SECTOR_SIZE_MASK) == 0 ? dst.limit() :
-                     ((dst.limit() + SECTOR_SIZE_MASK) & ~SECTOR_SIZE_MASK);
-        if (dst.capacity() < length) {
-            handler.failed(new RuntimeException("supplied buffer isn't long enough to handle read length " +
-                                                "alignment"), attachment);
-            return false;
-        }
-
-        if ((position & SECTOR_SIZE_MASK) != 0) {
-            handler.failed(new IOException(String.format("Read position must be aligned to sector size (usually %d)",
-                    SECTOR_SIZE)), attachment);
-            return false;
-        }
-
-        return true;
+    public <A> Batch<A> newBatch() {
+        return newBatch(true);
     }
 
-    public <A> void read(final ByteBuffer dst, final long position, final A attachment,
-                         final CompletionHandler<Integer, ? super A> handler) {
+    public <A> Batch<A> newBatch(boolean vectored) {
+        return new Batch<A>(this, vectored);
+    }
 
-        if (!verify(dst, position, attachment, handler)) {
+    public <A> void read(final Batch<A> batch) {
+        if (batch.numRequests() == 0) {
+            return; // nothing to read
+        }
+
+        if (!batch.verify()) {
             return;
         }
 
         Runnable action = new Runnable() {
             public void run() {
-                epollEventLoop.aioContext.read(AIOEpollFileChannel.this, dst, position, attachment, handler);
+                epollEventLoop.aioContext.read(batch);
             }
         };
 
@@ -171,9 +141,16 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         }
     }
 
+    public <A> void read(final ByteBuffer dst, final long position, final A attachment,
+                         final CompletionHandler<Integer, ? super A> handler) {
+
+        Batch<A> batch = newBatch();
+        read(batch.add(position, dst, attachment, handler));
+    }
+
     public Future<Integer> read(ByteBuffer dst, long position) {
         final CompletableFuture<Integer> future = new CompletableFuture<Integer>();
-        read(dst, position, (Object) null, new CompletionHandler<Integer, Object>() {
+        read(dst, position, null, new CompletionHandler<Integer, Object>() {
             public void completed(Integer result, Object attachment) {
                 future.complete(result);
             }
