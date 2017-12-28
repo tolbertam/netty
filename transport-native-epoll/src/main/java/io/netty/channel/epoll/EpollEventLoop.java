@@ -25,7 +25,6 @@ import io.netty.channel.unix.IovArray;
 import io.netty.util.IntSupplier;
 import io.netty.util.collection.IntObjectHashMap;
 import io.netty.util.collection.IntObjectMap;
-import io.netty.util.concurrent.MultithreadEventExecutorGroup;
 import io.netty.util.concurrent.RejectedExecutionHandler;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.PlatformDependent;
@@ -50,18 +49,6 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(EpollEventLoop.class);
     protected static final AtomicIntegerFieldUpdater<EpollEventLoop> WAKEN_UP_UPDATER =
             AtomicIntegerFieldUpdater.newUpdater(EpollEventLoop.class, "wakenUp");
-
-    // Represents the total number of outstanding aio requests across all eventloops.
-    // This number will be split evenly among all EventLoopGroup children
-    // ONLY CHANGED FOR TESTING!
-    static Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 128);
-    // Represents the minimum number of outstanding aio requests per loop, we pick the maximum
-    // between this value and (aioMaxConcurrency / nloops)
-    static Integer aioPerLoopMaxConcurrency = Integer.getInteger("netty.aio.perLoopMaxConcurrency", 1 << 6); // 64
-
-    // Represents the max number of pending aio request batches for each eventloop.
-    // ONLY CHANGED FOR TESTING!
-    static Integer aioPerLoopMaxPending = Integer.getInteger("netty.aio.perLoopMaxPending", 1 << 16);
 
     static {
         // Ensure JNI is initialized by the time this class is loaded by this time!
@@ -95,11 +82,11 @@ public class EpollEventLoop extends SingleThreadEventLoop {
 
     protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
                              SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
-        this(parent, executor, maxEvents, strategy, rejectedExecutionHandler, false);
+        this(parent, executor, maxEvents, strategy, rejectedExecutionHandler, null);
     }
 
     protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
-                   SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler, boolean aioSupport) {
+                   SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler, AIOContext.Config aio) {
         super(parent, executor, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);
         selectStrategy = ObjectUtil.checkNotNull(strategy, "strategy");
         if (maxEvents == 0) {
@@ -117,14 +104,12 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         this.epollFd = epollFd = Native.newEpollCreate();
         this.eventFd = eventFd = Native.newEventFd();
 
-        if (aioSupport && Aio.isAvailable()) {
+        if (aio != null && Aio.isAvailable()) {
             try {
-                int perLoopMaxConcurrency = Math.max(aioPerLoopMaxConcurrency, aioMaxConcurrency /
-                        ((MultithreadEventExecutorGroup) parent).executorCount());
-
-                aioContext = Native.createAIOContext(perLoopMaxConcurrency, aioPerLoopMaxPending);
-                logger.info("Create AIO Context with queue sizes of (outstanding, pending) requests: ({}, {})",
-                        perLoopMaxConcurrency, aioPerLoopMaxPending);
+                aioContext = Native.createAIOContext(aio);
+                Native.epollCtlAdd(epollFd.intValue(), aioContext.getEventFd().intValue(),
+                        Native.EPOLLIN | Native.EPOLLET);
+                logger.info("Created AIO Context with params: {}", aio);
             } catch (Throwable e) {
                 logger.error("Unable to initialize AIO", e);
             }
@@ -184,6 +169,13 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     IovArray cleanArray() {
         iovArray.clear();
         return iovArray;
+    }
+
+    /**
+     * @return the aio context, may be null if AIO is not available
+     */
+    public AIOContext aioContext() {
+        return aioContext;
     }
 
     /**
@@ -412,11 +404,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         }
 
         for (AbstractEpollChannel ch: array) {
-            if (ch instanceof AIOEpollFileChannel.EventFileChannel) {
-                ((AIOEpollFileChannel.EventFileChannel) ch).aioChannel.close();
-            } else {
-                ch.unsafe().close(ch.unsafe().voidPromise());
-            }
+            ch.unsafe().close(ch.unsafe().voidPromise());
         }
     }
 
@@ -429,16 +417,14 @@ public class EpollEventLoop extends SingleThreadEventLoop {
             } else if (fd == timerFd.intValue()) {
                 // consume wakeup event, necessary because the timer is added with ET mode.
                 Native.timerFdRead(fd);
+            } else if (aioContext != null && fd == aioContext.getEventFd().intValue()) {
+                // consume aio event
+                aioContext.processReady();
             } else {
                 final long ev = events.events(i);
 
                 AbstractEpollChannel ch = channels.get(fd);
                 if (ch != null) {
-                    if (ch instanceof AIOEpollFileChannel.EventFileChannel) {
-                        ((AIOEpollFileChannel.EventFileChannel) ch).processReady();
-                        continue;
-                    }
-
                     // Don't change the ordering of processing EPOLLOUT | EPOLLRDHUP / EPOLLIN if you're not 100%
                     // sure about it!
                     // Re-ordering can easily introduce bugs and bad side-effects, as we found out painfully in the

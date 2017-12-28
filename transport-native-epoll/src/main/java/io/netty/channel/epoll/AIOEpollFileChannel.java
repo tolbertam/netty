@@ -16,9 +16,7 @@
 package io.netty.channel.epoll;
 
 import java.io.File;
-import java.io.IOError;
 import java.io.IOException;
-import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.CompletionHandler;
@@ -26,7 +24,6 @@ import java.nio.channels.FileLock;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 
-import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -38,8 +35,7 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
     private final File fileObject;
     private final FileDescriptor file;
-    final EpollEventLoop epollEventLoop;
-    private final EventFileChannel nettyChannel;
+    private final EpollEventLoop epollEventLoop;
     private final boolean isDirect;
 
     public AIOEpollFileChannel(File file, EpollEventLoop eventLoop, int flags) throws IOException {
@@ -50,36 +46,19 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         }
         this.file = FileDescriptor.from(file, flags);
         this.epollEventLoop = eventLoop;
-        this.nettyChannel = new EventFileChannel(this);
         this.isDirect = flags == FileDescriptor.O_DIRECT;
-
-        Runnable register = new Runnable() {
-            public void run() {
-                try {
-                    nettyChannel.doRegister();
-                } catch (Exception e) {
-                    throw new IOError(e);
-                }
-            }
-        };
-
-        if (epollEventLoop.inEventLoop()) {
-            register.run();
-        } else {
-            epollEventLoop.submit(register);
-        }
-    }
-
-    public int getEventFd() {
-        return nettyChannel.fd().intValue();
     }
 
     public int getFd() {
         return file.intValue();
     }
 
-    public File getFileObject() {
+    File getFileObject() {
         return fileObject;
+    }
+
+    FileDescriptor getFile() {
+        return file;
     }
 
     public boolean isDirect() {
@@ -120,6 +99,11 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
     }
 
     public <A> void read(final Batch<A> batch) {
+        assert epollEventLoop.aioContext != null : "No AIO for the event loop of this channel";
+        read(batch, this.epollEventLoop);
+    }
+
+    public <A> void read(final Batch<A> batch, final EpollEventLoop epollEventLoop) {
         if (batch.numRequests() == 0) {
             return; // nothing to read
         }
@@ -143,9 +127,15 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
 
     public <A> void read(final ByteBuffer dst, final long position, final A attachment,
                          final CompletionHandler<Integer, ? super A> handler) {
+        read(dst, position, attachment, handler, this.epollEventLoop);
+    }
+
+    public <A> void read(final ByteBuffer dst, final long position, final A attachment,
+                         final CompletionHandler<Integer, ? super A> handler,
+                         final EpollEventLoop epollEventLoop) {
 
         Batch<A> batch = newBatch();
-        read(batch.add(position, dst, attachment, handler));
+        read(batch.add(position, dst, attachment, handler), epollEventLoop);
     }
 
     public Future<Integer> read(ByteBuffer dst, long position) {
@@ -183,15 +173,9 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
                 }
 
                 try {
-                    nettyChannel.doClose();
-                } catch (Exception e) {
-                    throw new IOError(e);
-                } finally {
-                    try {
-                        file.close();
-                    } catch (IOException e) {
-                        logger.error("Error closing file", e);
-                    }
+                    file.close();
+                } catch (IOException e) {
+                    logger.error("Error closing file", e);
                 }
             }
         };
@@ -200,51 +184,6 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
             close.run();
         } else {
             epollEventLoop.submit(close);
-        }
-    }
-
-    /**
-     * Used as a marker class.
-     *
-     * Since file IO doesn't fit simply into pipeline approach
-     * We only register the file handle and manage the rest in
-     * AIOContext. See {@link EpollEventLoop#processReady(EpollEventArray, int)}
-     */
-     class EventFileChannel extends AbstractEpollChannel {
-
-        final AIOEpollFileChannel aioChannel;
-        EventFileChannel(AIOEpollFileChannel aioChannel) {
-            super(new LinuxSocket(Native.eventFd()), Native.EPOLLIN | Native.EPOLLET);
-            this.eventLoop = epollEventLoop;
-            this.aioChannel = aioChannel;
-        }
-
-        public void processReady() {
-            epollEventLoop.aioContext.processReady(AIOEpollFileChannel.this);
-        }
-
-        public EpollChannelConfig config() {
-            throw new UnsupportedOperationException();
-        }
-
-        protected AbstractEpollUnsafe newUnsafe() {
-            return null;
-        }
-
-        protected SocketAddress localAddress0() {
-            throw new UnsupportedOperationException();
-        }
-
-        protected SocketAddress remoteAddress0() {
-            throw new UnsupportedOperationException();
-        }
-
-        protected void doBind(SocketAddress localAddress) throws Exception {
-            throw new UnsupportedOperationException();
-        }
-
-        protected void doWrite(ChannelOutboundBuffer in) throws Exception {
-            throw new UnsupportedOperationException();
         }
     }
 }
