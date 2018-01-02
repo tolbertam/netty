@@ -26,6 +26,8 @@ import io.netty.util.internal.ThrowableUtil;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Locale;
 
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollerr;
@@ -189,39 +191,95 @@ public final class Native {
     public static native int offsetofEpollData();
 
     // libaio related
-    public static AIOContext createAIOContext(int maxConcurrency, int maxPending) throws IOException {
+    static AIOContext createAIOContext(int maxConcurrency, int maxPending) throws IOException {
         long ctxAddress = createAIOContext0(maxConcurrency);
         return new AIOContext(ctxAddress, maxConcurrency, maxPending);
     }
 
-    public static void destroyAIOContext(AIOContext ctx) {
+    static void destroyAIOContext(AIOContext ctx) {
         destroyAIOContext0(ctx.getAddress());
     }
 
     private static native long createAIOContext0(int maxConcurrency) throws IOException;
     private static native void destroyAIOContext0(long ctxAddr);
 
-    public static long submitAIORead(AIOContext aioContext, int eventFd, int fd,
-                                     long offset, long length, ByteBuffer buffer)
-    throws IOException {
-        long nextId = aioContext.getNextId();
-        submitAIORead0(aioContext.getAddress(), eventFd, fd, PlatformDependent.directBufferAddress(buffer),
-                       offset, length, nextId);
+    static <A> void submitAIORead(AIOContext aioContext, int eventFd, int fd,
+                                  AIOContext.Request<A> request) throws IOException {
 
-        return nextId;
+        long[] addresses = new long[request.buffers.size()];
+        long[] lengths = new long[request.buffers.size()];
+
+        int i = 0;
+        for (AIOContext.BufferHolder<A> buffer : request.buffers) {
+            addresses[i] = PlatformDependent.directBufferAddress(buffer.buffer);
+            lengths[i] = buffer.limit();
+
+            i++;
+        }
+
+        submitAIORead0(aioContext.getAddress(), eventFd, fd, 1,
+                new int[] { request.slot }, new long[] { request.offset }, new int[] { request.buffers.size() },
+                addresses, lengths);
     }
 
-    private static native void submitAIORead0(long ctxaddress, int efd, int fd, long bufaddress,
-                                             long offset, long length, long key) throws IOException;
+    static <A> void submitAIOReads(AIOContext aioContext, int eventFd, int fd,
+                                   Collection<AIOContext.Request<A>> requests) throws IOException {
+        int[] slots = new int[requests.size()];
+        long[] offsets = new long[requests.size()];
+        int[] numBuffers = new int[requests.size()];
 
-    public static long[] getAIOEvents(AIOContext aioContext, long numEvents) throws IOException {
-        long[] keys = new long[(int) numEvents * 2];
-        getAIOEvents0(aioContext.getAddress(), numEvents, keys);
+        int i = 0;
+        int totBuffers = 0;
+        for (AIOContext.Request request : requests) {
+            slots[i] = request.slot;
+            offsets[i] = request.offset;
+            numBuffers[i] = request.buffers.size();
 
-        return keys;
+            totBuffers += numBuffers[i];
+            i++;
+        }
+
+        long[] addresses = new long[totBuffers];
+        long[] lengths = new long[totBuffers];
+
+        i = 0;
+        for (AIOContext.Request<?> request : requests) {
+            for (AIOContext.BufferHolder<?> buffer : request.buffers) {
+                addresses[i] = PlatformDependent.directBufferAddress(buffer.buffer);
+                lengths[i] = buffer.limit();
+
+                i++;
+            }
+        }
+
+        submitAIORead0(aioContext.getAddress(), eventFd, fd, requests.size(),
+                slots, offsets, numBuffers, addresses, lengths);
     }
 
-    private static native void getAIOEvents0(long ctxaddress, long numEvents, long[] keys) throws IOException;
+    /**
+     * Submit N read requests of N buffers each.
+     *
+     * @param ctxaddress - native side context addressed returned by {@link #createAIOContext0(int)}
+     * @param efd - event file descriptor
+     * @param fd - file descriptor
+     * @param numRequests - number of requests
+     * @param slots - for each request, the slot to use
+     * @param offsets - for each request, the offset in the file to read from
+     * @param numBuffers - for each request, how many sequential buffers to read
+     * @param bufAddresses - for each buffer, the buffer address
+     * @param bufLenghts - for each buffer, the buffer length
+     *
+     * @throws IOException
+     */
+    private static native void submitAIORead0(long ctxaddress, int efd, int fd, int numRequests,
+                                              int[] slots, long[] offsets, int[] numBuffers,
+                                              long[] bufAddresses, long[] bufLenghts) throws IOException;
+
+    public static int getAIOEvents(AIOContext aioContext, long[] result) throws IOException {
+        return getAIOEvents0(aioContext.getAddress(), result);
+    }
+
+    private static native int getAIOEvents0(long ctxaddress, long[] keys) throws IOException;
 
     private static void loadNativeLibrary() {
         String name = SystemPropertyUtil.get("os.name").toLowerCase(Locale.UK).trim();

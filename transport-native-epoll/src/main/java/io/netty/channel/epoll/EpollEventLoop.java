@@ -55,8 +55,11 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     // This number will be split evenly among all EventLoopGroup children
     // ONLY CHANGED FOR TESTING!
     static Integer aioMaxConcurrency = Integer.getInteger("netty.aio.maxConcurrency", 128);
+    // Represents the minimum number of outstanding aio requests per loop, we pick the maximum
+    // between this value and (aioMaxConcurrency / nloops)
+    static Integer aioPerLoopMaxConcurrency = Integer.getInteger("netty.aio.perLoopMaxConcurrency", 1 << 6); // 64
 
-    // Represents the max number of pending aio requests for each eventloop.
+    // Represents the max number of pending aio request batches for each eventloop.
     // ONLY CHANGED FOR TESTING!
     static Integer aioPerLoopMaxPending = Integer.getInteger("netty.aio.perLoopMaxPending", 1 << 16);
 
@@ -116,7 +119,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
 
         if (aioSupport && Aio.isAvailable()) {
             try {
-                int perLoopMaxConcurrency = Math.max(1, aioMaxConcurrency /
+                int perLoopMaxConcurrency = Math.max(aioPerLoopMaxConcurrency, aioMaxConcurrency /
                         ((MultithreadEventExecutorGroup) parent).executorCount());
 
                 aioContext = Native.createAIOContext(perLoopMaxConcurrency, aioPerLoopMaxPending);
