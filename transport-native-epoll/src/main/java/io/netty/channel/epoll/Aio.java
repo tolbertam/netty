@@ -28,7 +28,7 @@ public final class Aio {
         Throwable cause = Epoll.unavailabilityCause();
         AIOContext aioContext = null;
         try {
-            aioContext = Native.createAIOContext(1, 1);
+            aioContext = Native.createAIOContext(new AIOContext.Config(1, 1));
         } catch (Throwable t) {
             cause = t;
         } finally {

@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.netty.channel.ChannelException;
+import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -38,13 +39,15 @@ public class AIOContext {
     private final int maxPending;
     private final Request[] outstandingRequests;
     private final ArrayDeque<Batch> pendingBatches;
+    private final FileDescriptor eventFd;
     private volatile boolean destroyed;
 
-    AIOContext(long address, int maxOutstanding, int maxPending) {
+    AIOContext(long address, Config config) {
         this.address = address;
-        this.maxPending = maxPending;
-        this.outstandingRequests = new Request[maxOutstanding];
+        this.maxPending = config.maxPending;
+        this.outstandingRequests = new Request[config.maxConcurrency];
         this.pendingBatches = new ArrayDeque<Batch>(maxPending);
+        this.eventFd = new FileDescriptor(Native.eventFd());
     }
 
     public void destroy() {
@@ -53,7 +56,19 @@ public class AIOContext {
         }
 
         destroyed = true;
-        Native.destroyAIOContext(this);
+        try {
+            Native.destroyAIOContext(this);
+        } finally {
+            try {
+                eventFd.close();
+            } catch (IOException ex) {
+                logger.error("Failed to close aio event file descriptor: {}", ex.getMessage(), ex);
+            }
+        }
+    }
+
+    FileDescriptor getEventFd() {
+        return eventFd;
     }
 
     public long getAddress() {
@@ -62,8 +77,6 @@ public class AIOContext {
 
     public <A> void read(Batch<A> batch) {
         assert !destroyed;
-        assert batch.file.epollEventLoop.aioContext == this;
-
         submitBatch(batch);
     }
 
@@ -72,7 +85,7 @@ public class AIOContext {
             logger.trace("Received read batch {}", batch);
         }
 
-        if (!batch.file.isOpen()) {
+        if (!batch.fileDescriptor.isOpen()) {
             batch.failed("File has been closed");
             return 0;
         }
@@ -95,13 +108,12 @@ public class AIOContext {
         if (currentIndex > 0) {
             Batch<?> toSubmit = batch.split(0, currentIndex);
             try {
-                Native.submitAIOReads(this, batch.file.getEventFd(), batch.file.getFd(), toSubmit.requests);
+                Native.submitAIOReads(this, eventFd.intValue(), batch.fileDescriptor.intValue(), toSubmit.requests);
             }  catch (Throwable e) {
                 if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
                     addToPending(toSubmit);
                 } else {
-                    logger.error("Error reading " + batch.file.getFileObject().getAbsolutePath()
-                            + "@" + batch.offset(), e);
+                    logger.error("Error reading " + batch.path + "@" + batch.offset(), e);
                     batch.failed(e);
                 }
             }
@@ -123,21 +135,18 @@ public class AIOContext {
     }
 
     /**
-     * Process the read events for the given file.
+     * Process the read events for this AIO context.
      */
-    void processReady(AIOEpollFileChannel file) {
+    void processReady() {
         assert !destroyed : "AIO context already destroyed";
         try {
-            innerProcessReady(file);
+            innerProcessReady();
         } catch (IOException e) {
             throw new IOError(e);
-        } catch (Throwable t) {
-            logger.error("Error reading " + file.getFileObject().getAbsolutePath(), t);
-            throw new RuntimeException(t);
         }
     }
 
-    private void innerProcessReady(AIOEpollFileChannel file) throws IOException {
+    private void innerProcessReady() throws IOException {
         long[] result = new long[outstandingRequests.length * 2];
         int numReady = Native.getAIOEvents(this, result);
 
@@ -185,17 +194,42 @@ public class AIOContext {
         }
     }
 
+    /**
+     * A class with some configuration parameters used to create a {@link AIOContext}.
+     */
+    public static final class Config {
+        /** The maximum size of the native queue depth, also known as the max concurrency in the Linux aio jargon. */
+        public final int maxConcurrency;
+
+        /** The maximum size of the queue of requests that are waiting to be sent to the native AIO context, because
+         * the native queue size has been exceeded.
+         */
+        public final int maxPending;
+
+        public Config(int maxConcurrency, int maxPending) {
+            this.maxConcurrency = maxConcurrency;
+            this.maxPending = maxPending;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Max concurrency: %d, Max pending: %d", maxConcurrency, maxPending);
+        }
+    }
+
     public static final class Batch<A> {
-        private final AIOEpollFileChannel file;
+        private final String path;
+        private final FileDescriptor fileDescriptor;
         private final boolean vectored;
         private final List<Request<A>> requests;
 
         Batch(AIOEpollFileChannel file, boolean vectored) {
-            this(file, vectored, new ArrayList<Request<A>>());
+            this(file.getFileObject().getPath(), file.getFile(), vectored, new ArrayList<Request<A>>());
         }
 
-        Batch(AIOEpollFileChannel file, boolean vectored, List<Request<A>> requests) {
-            this.file = file;
+        Batch(String path, FileDescriptor fileDescriptor, boolean vectored, List<Request<A>> requests) {
+            this.path = path;
+            this.fileDescriptor = fileDescriptor;
             this.vectored = vectored;
             this.requests = requests;
         }
@@ -211,7 +245,7 @@ public class AIOContext {
                 }
             }
 
-            this.requests.add(new Request<A>(-1, offset, buffer, handler, attachment));
+            this.requests.add(new Request<A>(-1, offset, buffer, handler, attachment, path, fileDescriptor));
             return this;
         }
 
@@ -222,7 +256,7 @@ public class AIOContext {
         boolean verify() {
             boolean ret = true;
             for (Request<A> request : requests) {
-                ret &= request.verify(file);
+                ret &= request.verify();
             }
             return ret;
         }
@@ -242,7 +276,7 @@ public class AIOContext {
         Batch<A> split(int fromIndex, int toIndex) {
             return fromIndex == 0 && toIndex == requests.size()
                     ? this
-                    : new Batch<A>(file, vectored, requests.subList(fromIndex, toIndex));
+                    : new Batch<A>(path, fileDescriptor, vectored, requests.subList(fromIndex, toIndex));
         }
 
         public int numRequests() {
@@ -306,24 +340,29 @@ public class AIOContext {
         int slot;
         final long offset;
         final List<BufferHolder<A>> buffers;
+        final String path;
+        final FileDescriptor fileDescriptor;
         int lengthRead;
         boolean completed;
         Throwable error;
 
-        Request(int slot, long offset, ByteBuffer buffer) {
-            this(slot, offset, buffer, null, null);
+        Request(int slot, long offset, ByteBuffer buffer, String path, FileDescriptor fileDescriptor) {
+            this(slot, offset, buffer, null, null, path, fileDescriptor);
         }
 
         Request(int slot, long offset, ByteBuffer buffer,
-                CompletionHandler<Integer, ? super A> handler, A attachment) {
-            this(slot, offset);
+                CompletionHandler<Integer, ? super A> handler,
+                A attachment, String path, FileDescriptor fileDescriptor) {
+            this(slot, offset, path, fileDescriptor);
             this.buffers.add(new BufferHolder<A>(buffer, attachment, handler));
         }
 
-        Request(int slot, long offset) {
+        Request(int slot, long offset, String path, FileDescriptor fileDescriptor) {
             this.slot = slot;
             this.offset = offset;
             this.buffers = new ArrayList<BufferHolder<A>>(1);
+            this.path = path;
+            this.fileDescriptor = fileDescriptor;
             this.lengthRead = -1;
         }
 
@@ -337,8 +376,8 @@ public class AIOContext {
             return false;
         }
 
-        boolean verify(AIOEpollFileChannel file) {
-            if (!file.isOpen()) {
+        boolean verify() {
+            if (!fileDescriptor.isOpen()) {
                 failed(new IOException("File has been closed"));
                 return false;
             }
@@ -408,6 +447,7 @@ public class AIOContext {
         @Override
         public String toString() {
             StringBuilder str = new StringBuilder();
+            str.append(path).append(" (").append(fileDescriptor.intValue()).append("), ");
             str.append("Slot: ").append(slot).append(", ");
             str.append("Offset: ").append(offset).append(", ");
             str.append("Num buffers: ").append(buffers.size()).append(" [");

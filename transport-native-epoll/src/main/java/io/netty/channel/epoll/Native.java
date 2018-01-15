@@ -24,10 +24,8 @@ import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.ThrowableUtil;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Locale;
 
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollerr;
@@ -191,9 +189,9 @@ public final class Native {
     public static native int offsetofEpollData();
 
     // libaio related
-    static AIOContext createAIOContext(int maxConcurrency, int maxPending) throws IOException {
-        long ctxAddress = createAIOContext0(maxConcurrency);
-        return new AIOContext(ctxAddress, maxConcurrency, maxPending);
+    static AIOContext createAIOContext(AIOContext.Config config) throws IOException {
+        long ctxAddress = createAIOContext0(config.maxConcurrency);
+        return new AIOContext(ctxAddress, config);
     }
 
     static void destroyAIOContext(AIOContext ctx) {

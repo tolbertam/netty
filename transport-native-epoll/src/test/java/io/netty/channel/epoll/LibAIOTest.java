@@ -71,22 +71,19 @@ public class LibAIOTest {
     @Test
     @SuppressForbidden(reason = "to test a simple native aio read")
     public void nativeReadTestSingleRequest() throws IOException, InterruptedException {
-        EventLoopGroup group = new EpollEventLoopGroup(1);
-        EpollEventLoop loop = (EpollEventLoop) group.next();
-
         FileInputStream fileReader = new FileInputStream(createFile("netty-aio-single", 65536));
 
         final int maxConcurrency = 8;
-        AIOContext aio = Native.createAIOContext(maxConcurrency, 1);
+        AIOContext aio = Native.createAIOContext(new AIOContext.Config(maxConcurrency, 1));
 
         try {
             for (int slot = 0; slot < maxConcurrency; slot++) {
 
                 ByteBuffer buf = allocateAlignedByteBuffer(65536, 512);
 
-                Native.submitAIORead(aio, loop.eventFd.intValue(),
-                        SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD()),
-                        new AIOContext.Request(slot, 0, buf));
+                int fileFd = SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD());
+                Native.submitAIORead(aio, aio.getEventFd().intValue(), fileFd,
+                        new AIOContext.Request(slot, 0, buf, fileReader.toString(), new FileDescriptor(fileFd)));
 
                 long[] result = new long[2];
                 int numEvents = Native.getAIOEvents(aio, result);
@@ -98,8 +95,6 @@ public class LibAIOTest {
 
                 freeAlignedByteBuffer(buf);
             }
-
-            group.shutdownGracefully();
         } finally {
             aio.destroy();
             fileReader.close();
@@ -109,17 +104,14 @@ public class LibAIOTest {
     @Test
     @SuppressForbidden(reason = "to test multiple native aio reads")
     public void nativeReadTestMultipleRequests() throws IOException, InterruptedException {
-        EventLoopGroup group = new EpollEventLoopGroup(1);
-        EpollEventLoop loop = (EpollEventLoop) group.next();
-
         final int maxConcurrency = 8;
         final int fileSize = 524288;
 
         FileInputStream fileReader = new FileInputStream(createFile("netty-aio-multiple", fileSize));
-        AIOContext aio = Native.createAIOContext(maxConcurrency, 1);
+        AIOContext aio = Native.createAIOContext(new AIOContext.Config(maxConcurrency, 1));
 
         final int numTrials = 5000;
-        final int eventFd = loop.eventFd.intValue();
+        final int eventFd = aio.getEventFd().intValue();
         final int fileFd = SharedSecrets.getJavaIOFileDescriptorAccess().get(fileReader.getFD());
 
         try {
@@ -141,7 +133,8 @@ public class LibAIOTest {
                         buffers.add(allocateAlignedByteBuffer(bufferSize, AIOContext.SECTOR_SIZE));
                     }
 
-                    AIOContext.Request<Void> request = new AIOContext.Request<Void>(r, offset);
+                    AIOContext.Request<Void> request = new AIOContext.Request<Void>(r, offset, fileReader.toString(),
+                            new FileDescriptor(fileFd));
                     for (int i = 0; i < buffers.size(); i++) {
                         Assert.assertTrue(request.maybeAdd(offset + i * bufferSize, buffers.get(i), null, null));
                     }
@@ -174,8 +167,6 @@ public class LibAIOTest {
                     }
                 }
             }
-
-            group.shutdownGracefully();
         } finally {
             aio.destroy();
             fileReader.close();
@@ -219,58 +210,39 @@ public class LibAIOTest {
 
     @Test
     public void epollTriggeredSingleThreadReadTest() throws IOException, InterruptedException, ExecutionException {
-        int old = EpollEventLoop.aioPerLoopMaxConcurrency;
-        try {
-            EpollEventLoop.aioPerLoopMaxConcurrency = 8;
-            Collection<Exception> errors = epollTriggeredReadTest(1024, 1, 1);
-            Assert.assertTrue(errors.isEmpty());
-        } finally {
-            EpollEventLoop.aioPerLoopMaxConcurrency = old;
-        }
+        Collection<Exception> errors = epollTriggeredReadTest(1024, 1, 1, new AIOContext.Config(8, 65536));
+        Assert.assertTrue(errors.isEmpty());
     }
 
     @Test
     public void epollTriggeredReadTest() throws IOException, InterruptedException, ExecutionException {
-        Collection<Exception> errors = epollTriggeredReadTest(1024, 16, 8);
+        Collection<Exception> errors = epollTriggeredReadTest(1024, 16, 8, new AIOContext.Config(128, 65536));
         Assert.assertTrue(errors.isEmpty());
     }
 
     @Test
     public void epollTriggeredReadTestHigherConcurrency() throws IOException, InterruptedException, ExecutionException {
-        int old = EpollEventLoop.aioPerLoopMaxConcurrency;
-        try {
-            EpollEventLoop.aioPerLoopMaxConcurrency = 16;
-            Collection<Exception> errors = epollTriggeredReadTest(1024, 16, 8);
-            Assert.assertTrue(errors.isEmpty());
-        } finally {
-            EpollEventLoop.aioPerLoopMaxConcurrency = old;
-        }
+        Collection<Exception> errors = epollTriggeredReadTest(1024, 16, 8, new AIOContext.Config(16, 65536));
+        Assert.assertTrue(errors.isEmpty());
     }
 
     @Test
     public void epollTriggeredReadTestLowMaxPending() throws IOException, InterruptedException, ExecutionException {
-        int oldConcurrency = EpollEventLoop.aioPerLoopMaxConcurrency;
-        int oldPedning = EpollEventLoop.aioPerLoopMaxPending;
-
-        try {
-            EpollEventLoop.aioPerLoopMaxConcurrency = 16;
-            EpollEventLoop.aioPerLoopMaxPending = 32;
-            Collection<Exception> errors = epollTriggeredReadTest(1024, 8, 4);
-            Assert.assertFalse(errors.isEmpty()); // some requests should have failed with "Too many pending requests"
-            for (Exception error : errors) {
-                Assert.assertNotNull(error);
-                Assert.assertTrue(error.getMessage().contains("Too many pending requests"));
-            }
-        } finally {
-            EpollEventLoop.aioPerLoopMaxConcurrency = oldConcurrency;
-            EpollEventLoop.aioPerLoopMaxPending = oldPedning;
+        Collection<Exception> errors = epollTriggeredReadTest(1024, 8, 4, new AIOContext.Config(16, 32));
+        Assert.assertFalse(errors.isEmpty()); // some requests should have failed with "Too many pending requests"
+        for (Exception error : errors) {
+            Assert.assertNotNull(error);
+            Assert.assertTrue(error.getMessage().contains("Too many pending requests"));
         }
     }
 
-    private Collection<Exception> epollTriggeredReadTest(final int trials, final int numThreads, final int numLoops)
+    private Collection<Exception> epollTriggeredReadTest(final int trials,
+                                                         final int numThreads,
+                                                         final int numLoops,
+                                                         final AIOContext.Config aio)
             throws IOException, InterruptedException {
         final int fileSize = 65536;
-        final EventLoopGroup group = new EpollEventLoopGroup(numLoops, true);
+        final EventLoopGroup group = new EpollEventLoopGroup(numLoops, aio);
         final EpollEventLoop[] loops = new EpollEventLoop[numLoops];
         for (int i = 0; i < numLoops; i++) {
             loops[i] = (EpollEventLoop) group.next();
@@ -384,7 +356,7 @@ public class LibAIOTest {
     public void epollTriggeredSingleReadTest() throws Exception {
         final int fileSize = 65536;
         final int numTrials = 1024;
-        EventLoopGroup group = new EpollEventLoopGroup(1, true);
+        EventLoopGroup group = new EpollEventLoopGroup(1, new AIOContext.Config(128, 65536));
         EpollEventLoop loop = (EpollEventLoop) group.next();
 
         final File file = createFile("netty-aio-epoll-single", fileSize);
@@ -408,7 +380,7 @@ public class LibAIOTest {
     @Test
     public void epollTriggeredReadLargerThanFileTest() throws Exception {
         final int fileSize = 10000;
-        EventLoopGroup group = new EpollEventLoopGroup(1, true);
+        EventLoopGroup group = new EpollEventLoopGroup(1, new AIOContext.Config(128, 65536));
         EpollEventLoop loop = (EpollEventLoop) group.next();
 
         final File file = createFile("netty-aio-epoll-single", fileSize);
