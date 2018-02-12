@@ -55,6 +55,7 @@ import sun.nio.ch.DirectBuffer;
 public class LibAIOTest {
 
     private static Random random = new Random();
+    private static final int SECTOR_SIZE = 512;
 
     @BeforeClass
     public static void setup() {
@@ -121,7 +122,7 @@ public class LibAIOTest {
                 Map<Integer, AIOContext.Request<Void>> requests = new HashMap<Integer, AIOContext.Request<Void>>();
                 for (int r = 0; r < numRequests; r++) {
                     int numBuffers = 1 + random.nextInt(8);
-                    int bufferSize = (int) Math.max(AIOContext.SECTOR_SIZE,
+                    int bufferSize = (int) Math.max(SECTOR_SIZE,
                             roundDownToBlockSize(random.nextInt(fileSize / numBuffers)));
                     Assert.assertTrue(String.format("File size %d exceeded: %d buffers of size %d",
                             fileSize, numBuffers, bufferSize),
@@ -130,7 +131,7 @@ public class LibAIOTest {
 
                     List<ByteBuffer> buffers = new ArrayList<ByteBuffer>(numBuffers);
                     for (int i = 0; i < numBuffers; i++) {
-                        buffers.add(allocateAlignedByteBuffer(bufferSize, AIOContext.SECTOR_SIZE));
+                        buffers.add(allocateAlignedByteBuffer(bufferSize, SECTOR_SIZE));
                     }
 
                     AIOContext.Request<Void> request = new AIOContext.Request<Void>(r, offset, fileReader.toString(),
@@ -174,11 +175,11 @@ public class LibAIOTest {
     }
 
 //    private static int roundUpToBlockSize(int size) {
-//        return (size + AIOContext.SECTOR_SIZE - 1) & -AIOContext.SECTOR_SIZE;
+//        return (size + SECTOR_SIZE - 1) & -SECTOR_SIZE;
 //    }
 
     private static long roundDownToBlockSize(long size) {
-        return size & -AIOContext.SECTOR_SIZE;
+        return size & -SECTOR_SIZE;
     }
 
     private File createFile(String fileName, int size) throws IOException {
@@ -274,7 +275,7 @@ public class LibAIOTest {
                             final boolean vectored = random.nextBoolean();
                             final AIOContext.Batch<Pair<Long, ByteBuffer>> batch = new AIOContext.Batch(fc, vectored);
                             final int numBuffers = 1 + random.nextInt(8);
-                            final int bufferSize = (int) Math.max(AIOContext.SECTOR_SIZE,
+                            final int bufferSize = (int) Math.max(SECTOR_SIZE,
                                     roundDownToBlockSize(random.nextInt(fileSize / numBuffers)));
                             Assert.assertTrue(String.format("File size %d exceeded: %d buffers of size %d",
                                     fileSize, numBuffers, bufferSize),
@@ -285,7 +286,7 @@ public class LibAIOTest {
                             totExpected += numBuffers * bufferSize;
                             final List<ByteBuffer> buffers = new ArrayList<ByteBuffer>(numBuffers);
                             for (int b = 0; b < numBuffers; b++) {
-                                buffers.add(allocateAlignedByteBuffer(bufferSize, AIOContext.SECTOR_SIZE));
+                                buffers.add(allocateAlignedByteBuffer(bufferSize, SECTOR_SIZE));
                             }
 
                             for (ByteBuffer buffer : buffers) {
@@ -366,10 +367,10 @@ public class LibAIOTest {
                 FileDescriptor.O_RDONLY | FileDescriptor.O_DIRECT);
 
         for (int i = 0; i < numTrials; i++) {
-            final int bufferSize = (int) Math.max(AIOContext.SECTOR_SIZE,
+            final int bufferSize = (int) Math.max(SECTOR_SIZE,
                     roundDownToBlockSize(random.nextInt(fileSize)));
             final long offset = roundDownToBlockSize(random.nextInt(fileSize - bufferSize));
-            final ByteBuffer buffer = allocateAlignedByteBuffer(bufferSize, AIOContext.SECTOR_SIZE);
+            final ByteBuffer buffer = allocateAlignedByteBuffer(bufferSize, SECTOR_SIZE);
 
             fc.read(buffer, offset).get();
             buffer.flip();
@@ -394,7 +395,7 @@ public class LibAIOTest {
         final int numBuffers = 4; // 2 full buffers, 1 partially filled, 1 empty
         final List<ByteBuffer> buffers = new ArrayList<ByteBuffer>(numBuffers);
         for (int i = 0; i < numBuffers; i++) {
-            buffers.add(allocateAlignedByteBuffer(bufferSize, AIOContext.SECTOR_SIZE));
+            buffers.add(allocateAlignedByteBuffer(bufferSize, SECTOR_SIZE));
         }
 
         final CountDownLatch latch = new CountDownLatch(buffers.size());
@@ -429,6 +430,76 @@ public class LibAIOTest {
         fc.read(batch);
         latch.await();
         Assert.assertNull(err.get());
+    }
+
+    @Test
+    public void epollTriggeredReadInvalidOffsetTest() throws Exception {
+        EventLoopGroup group = new EpollEventLoopGroup(1, new AIOContext.Config(128, 65536));
+        EpollEventLoop loop = (EpollEventLoop) group.next();
+
+        final int fileSize = 1000;
+        final File file = createFile("netty-aio-epoll-single", fileSize);
+        final AIOEpollFileChannel fc = new AIOEpollFileChannel(file, loop,
+                FileDescriptor.O_RDONLY | FileDescriptor.O_DIRECT);
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<Throwable> err = new AtomicReference<Throwable>(null);
+
+        ByteBuffer buffer = allocateAlignedByteBuffer(4096, SECTOR_SIZE);
+        AIOContext.Batch<ByteBuffer> batch = fc.newBatch();
+        // set an offset not aligned with SECTOR_SIZE so that the read will fail with EINVAL
+        batch.add(123, buffer, buffer,
+                new CompletionHandler<Integer, ByteBuffer>() {
+                    @Override
+                    public void completed(Integer read, ByteBuffer attachment) {
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void failed(Throwable exc, ByteBuffer attachment) {
+                        err.set(exc);
+                        latch.countDown();
+                    }
+                });
+
+        fc.read(batch);
+        latch.await();
+        Assert.assertNotNull(err.get());
+        System.out.println(err.get().getMessage());
+    }
+
+    @Test
+    public void epollTriggeredReadInvalidBufferSizeTest() throws Exception {
+        EventLoopGroup group = new EpollEventLoopGroup(1, new AIOContext.Config(128, 65536));
+        EpollEventLoop loop = (EpollEventLoop) group.next();
+
+        final int fileSize = 1000;
+        final File file = createFile("netty-aio-epoll-single", fileSize);
+        final AIOEpollFileChannel fc = new AIOEpollFileChannel(file, loop,
+                FileDescriptor.O_RDONLY | FileDescriptor.O_DIRECT);
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<Throwable> err = new AtomicReference<Throwable>(null);
+
+        // create a buffer with a size not aligned with SECTOR_SIZE so that the read will fail with EINVAL
+        ByteBuffer buffer = allocateAlignedByteBuffer(123, SECTOR_SIZE);
+        AIOContext.Batch<ByteBuffer> batch = fc.newBatch();
+        batch.add(0, buffer, buffer,
+                new CompletionHandler<Integer, ByteBuffer>() {
+                    @Override
+                    public void completed(Integer read, ByteBuffer attachment) {
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void failed(Throwable exc, ByteBuffer attachment) {
+                        err.set(exc);
+                        latch.countDown();
+                    }
+                });
+
+        fc.read(batch);
+        latch.await();
+        Assert.assertNotNull(err.get());
+        System.out.println(err.get().getMessage());
     }
 
     static ByteBuffer allocateAlignedByteBuffer(int capacity, long align) {

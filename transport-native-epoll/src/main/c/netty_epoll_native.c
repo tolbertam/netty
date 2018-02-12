@@ -605,19 +605,19 @@ static jint netty_epoll_native_getAIOEvents0(JNIEnv* env, jclass clazz, jlong ct
             niocb->slot = -1;
 
             //printf("slot: %d, res: %ld, res2: %ld\n", slot, (long)event.res, (long)event.res2);
-
-            if (((long)event.res2) != 0) {
-                netty_unix_errors_throwRuntimeException(env, "io_getevents error res2");
-                return;
-            }
-
-            if (((long)event.res) < 0) {
-                netty_unix_errors_throwChannelExceptionErrorNo(env, "io_events() failed to read event: ", event.res);
-                return;
-            }
-
             resultArray[(int) j] = (long) slot;
-            resultArray[(int) (j + r)] = (long) event.res;
+
+            if (((long)event.res2) < 0) {
+                // From what I understood by looking at inode.c, res2 will either be zero or neg.ve. It can
+                // happen that res2 signals an error with a neg.ve value but res is > 0 if there was a partial
+                // transfer of data
+                resultArray[(int) (j + r)] = (long) event.res2;
+            }
+            else {
+                // here res can be neg.ve, in which case it indicates a failure code handled java side. If it is >= 0
+                // it instead indicates the number of bytes transferred.
+                resultArray[(int) (j + r)] = (long) event.res;
+            }
          }
 
          (*env)->SetLongArrayRegion(env, result, 0, r * 2, resultArray);
