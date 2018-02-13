@@ -25,15 +25,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.netty.channel.ChannelException;
+import io.netty.channel.unix.Errors;
 import io.netty.channel.unix.FileDescriptor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 public class AIOContext {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(AIOContext.class);
-
-    static final int SECTOR_SIZE = 512;
-    static final int SECTOR_SIZE_MASK = SECTOR_SIZE - 1;
 
     private final long address;
     private final int maxPending;
@@ -165,7 +163,13 @@ public class AIOContext {
 
                 // nothing here should throw, completedRequests has already been pre-allocated
                 Request request = outstandingRequests[slot];
-                request.lengthRead = (int) result[i + numReady];
+                int res = (int) result[i + numReady];
+                if (res < 0) {
+                    request.lengthRead = 0;
+                    request.error = Errors.newIOException("aio-read", res);
+                } else {
+                    request.lengthRead = res;
+                }
                 outstandingRequests[slot] = null;
                 completedRequests.add(request);
             }
@@ -314,11 +318,6 @@ public class AIOContext {
                 return new IllegalArgumentException("ByteBuffer position must be 0");
             }
 
-            if ((buffer.limit() & SECTOR_SIZE_MASK) != 0) {
-                return new IllegalArgumentException(String.format("ByteBuffer limit must be aligned to %d",
-                        SECTOR_SIZE));
-            }
-
             return null;
         }
 
@@ -384,12 +383,6 @@ public class AIOContext {
 
             if (offset < 0) {
                 failed(new IllegalArgumentException("Position must be >= 0"));
-                return false;
-            }
-
-            if ((offset & SECTOR_SIZE_MASK) != 0) {
-                failed(new IOException(String.format(
-                        "Read position must be aligned to sector size (usually %d)", SECTOR_SIZE)));
                 return false;
             }
 
