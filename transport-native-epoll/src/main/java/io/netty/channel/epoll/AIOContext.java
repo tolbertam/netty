@@ -139,8 +139,9 @@ public class AIOContext {
         assert !destroyed : "AIO context already destroyed";
         try {
             innerProcessReady();
-        } catch (IOException e) {
-            throw new IOError(e);
+        } catch (Throwable t) {
+            logger.error("Failed to process AIO events due to exception: {}/{}",
+                    t.getClass().getName(), t.getMessage());
         }
     }
 
