@@ -428,7 +428,7 @@ static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jin
 
     if (concurrency <= 0 || concurrency > 1024) {
         netty_unix_errors_throwRuntimeException(env, "invalid concurrency level, it should be > 0 and <= 1024.");
-        return;
+        return JNI_ERR;
     }
 
     netty_io_context_t* ctx = malloc(sizeof(netty_io_context_t));
