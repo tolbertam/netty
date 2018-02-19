@@ -40,6 +40,8 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
+import io.netty.util.internal.logging.InternalLogLevel;
+
 import static java.lang.Math.min;
 
 /**
@@ -169,6 +171,10 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     IovArray cleanArray() {
         iovArray.clear();
         return iovArray;
+    }
+
+    public FileDescriptor epollFd() {
+        return epollFd;
     }
 
     /**
@@ -500,6 +506,22 @@ public class EpollEventLoop extends SingleThreadEventLoop {
             if (aioContext != null) {
                 aioContext.destroy();
             }
+        }
+    }
+
+    public void toLogAsync(final InternalLogLevel level) {
+        Runnable log = new Runnable() {
+            @Override
+            public void run() {
+                logger.log(level,
+                           String.format("EpollEventLoop[epollfd: %s, eventfd: %s, timerfd: %s, aio: %s]",
+                                         epollFd, eventFd, timerFd, aioContext.toString()));
+            }
+        };
+        if (inEventLoop()) {
+            log.run();
+        } else {
+            submit(log);
         }
     }
 }

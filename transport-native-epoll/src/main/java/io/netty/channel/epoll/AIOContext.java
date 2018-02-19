@@ -16,7 +16,6 @@
 package io.netty.channel.epoll;
 
 
-import java.io.IOError;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
@@ -197,6 +196,19 @@ public class AIOContext {
 
             numSubmitted += submitBatch(batch);
         }
+    }
+
+    @Override
+    public String toString() {
+        int requests = 0;
+        for (Request r : outstandingRequests) {
+            if (r != null && r.slot != -1) {
+                requests++;
+            }
+        }
+
+        return String.format("AioContext[eventfd: %s, outstanding: %s, pending: %s]",
+                             eventFd, requests, pendingBatches.size());
     }
 
     /**
