@@ -107,7 +107,8 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         if (aio != null && Aio.isAvailable()) {
             try {
                 aioContext = Native.createAIOContext(aio);
-                Native.epollCtlAdd(epollFd.intValue(), aioContext.getEventFd().intValue(), Native.EPOLLIN);
+                Native.epollCtlAdd(epollFd.intValue(), aioContext.getEventFd().intValue(),
+                        Native.EPOLLIN | Native.EPOLLET);
                 logger.info("Created AIO Context with params: {}", aio);
             } catch (Throwable e) {
                 logger.error("Unable to initialize AIO", e);
