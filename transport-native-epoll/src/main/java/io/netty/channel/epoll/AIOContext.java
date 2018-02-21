@@ -74,10 +74,10 @@ public class AIOContext {
 
     public <A> void read(Batch<A> batch) {
         assert !destroyed;
-        submitBatch(batch);
+        submitBatch(batch, true);
     }
 
-    private int submitBatch(Batch<?> batch) {
+    private int submitBatch(Batch<?> batch, boolean pendingLast) {
         if (logger.isTraceEnabled()) {
             logger.trace("Received read batch {}", batch);
         }
@@ -108,7 +108,7 @@ public class AIOContext {
                 Native.submitAIOReads(this, eventFd.intValue(), batch.fileDescriptor.intValue(), toSubmit.requests);
             }  catch (Throwable e) {
                 if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
-                    addToPending(toSubmit);
+                    addToPending(toSubmit, pendingLast);
                 } else {
                     logger.error("Error reading " + batch.path + "@" + batch.offset(), e);
                     batch.failed(e);
@@ -117,17 +117,17 @@ public class AIOContext {
         }
 
         if (currentIndex < batch.requests.size()) {
-            addToPending(batch.split(currentIndex, batch.requests.size()));
+            addToPending(batch.split(currentIndex, batch.requests.size()), pendingLast);
         }
 
         return currentIndex; // the number of requests submitted
     }
 
-    private <A> void addToPending(final Batch<A> batch) {
+    private <A> void addToPending(final Batch<A> batch, boolean last) {
         if (pendingBatches.size() >= maxPending) {
             batch.failed(new RuntimeException("Too many pending requests"));
         }
-        boolean added = pendingBatches.offer(batch);
+        boolean added = last ? pendingBatches.offerLast(batch) : pendingBatches.offerFirst(batch);
         assert added : "failed to add request batch";
     }
 
@@ -194,7 +194,7 @@ public class AIOContext {
                 break;
             }
 
-            numSubmitted += submitBatch(batch);
+            numSubmitted += submitBatch(batch, false);
         }
     }
 
