@@ -33,6 +33,8 @@ import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epolle
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollin;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollout;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.epollrdhup;
+import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.efdnonblock;
+import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.eagain;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.isSupportingSendmmsg;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.isSupportingTcpFastopen;
 import static io.netty.channel.epoll.NativeStaticallyReferencedJniMethods.kernelVersion;
@@ -65,6 +67,8 @@ public final class Native {
     public static final int EPOLLRDHUP = epollrdhup();
     public static final int EPOLLET = epollet();
     public static final int EPOLLERR = epollerr();
+    public static final int EFDNONBLOCK = efdnonblock();
+    public static final int EAGAIN = eagain();
 
     public static final boolean IS_SUPPORTING_SENDMMSG = isSupportingSendmmsg();
     public static final boolean IS_SUPPORTING_TCP_FASTOPEN = isSupportingTcpFastopen();

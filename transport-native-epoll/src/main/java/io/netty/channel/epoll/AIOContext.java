@@ -64,7 +64,7 @@ public class AIOContext {
         }
     }
 
-    FileDescriptor getEventFd() {
+    public FileDescriptor getEventFd() {
         return eventFd;
     }
 
@@ -134,7 +134,7 @@ public class AIOContext {
     /**
      * Process the read events for this AIO context.
      */
-    void processReady() {
+    public void processReady() {
         assert !destroyed : "AIO context already destroyed";
         try {
             innerProcessReady();
