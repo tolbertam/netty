@@ -266,13 +266,13 @@ public class AIOContext {
             return ret;
         }
 
-        void failed(String error) {
+        public void failed(String error) {
             for (Request<A> request : requests) {
                 request.failed(error);
             }
         }
 
-        void failed(Throwable t) {
+        public void failed(Throwable t) {
             for (Request<A> request : requests) {
                 request.failed(t);
             }
