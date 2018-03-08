@@ -73,6 +73,8 @@ public class AIOContext {
     }
 
     public <A> void read(Batch<A> batch) {
+        batch.update("Received");
+
         assert !destroyed;
         submitBatch(batch, true);
     }
@@ -86,6 +88,8 @@ public class AIOContext {
             batch.failed("File has been closed");
             return 0;
         }
+
+        batch.update(String.format("Attempting submit [%s]", toString()));
 
         int currentIndex = 0;
         for (int i = 0; i < outstandingRequests.length; i++) {
@@ -104,9 +108,12 @@ public class AIOContext {
 
         if (currentIndex > 0) {
             Batch<?> toSubmit = batch.split(0, currentIndex);
+            toSubmit.update("Submitting");
             try {
                 Native.submitAIOReads(this, eventFd.intValue(), batch.fileDescriptor.intValue(), toSubmit.requests);
+                toSubmit.update("Submitted");
             }  catch (Throwable e) {
+                toSubmit.update("Submit error: " + e.getClass().getName() + "/" + e.getMessage());
                 if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
                     addToPending(toSubmit, pendingLast);
                 } else {
@@ -124,11 +131,13 @@ public class AIOContext {
     }
 
     private <A> void addToPending(final Batch<A> batch, boolean last) {
+        batch.update("Adding to Pending");
         if (pendingBatches.size() >= maxPending) {
             batch.failed(new RuntimeException("Too many pending requests"));
         }
         boolean added = last ? pendingBatches.offerLast(batch) : pendingBatches.offerFirst(batch);
         assert added : "failed to add request batch";
+        batch.update("Added to pending");
     }
 
     /**
@@ -140,7 +149,7 @@ public class AIOContext {
             innerProcessReady();
         } catch (Throwable t) {
             logger.error("Failed to process AIO events due to exception: {}/{}",
-                    t.getClass().getName(), t.getMessage());
+                    t.getClass().getName(), t.getMessage(), t);
         }
     }
 
@@ -163,6 +172,7 @@ public class AIOContext {
 
                 // nothing here should throw, completedRequests has already been pre-allocated
                 Request request = outstandingRequests[slot];
+                request.update("Read available");
                 int res = (int) result[i + numReady];
                 if (res < 0) {
                     request.lengthRead = 0;
@@ -178,6 +188,7 @@ public class AIOContext {
         } finally {
             for (Request completedRequest : completedRequests) {
                 try {
+                    completedRequest.update("Completing");
                     completedRequest.complete();
                 } catch (Throwable t) {
                     logger.error("Error completing request {}", completedRequest, t);
@@ -194,6 +205,7 @@ public class AIOContext {
                 break;
             }
 
+            batch.update("Pulled from pending");
             numSubmitted += submitBatch(batch, false);
         }
     }
@@ -248,6 +260,12 @@ public class AIOContext {
             this.fileDescriptor = fileDescriptor;
             this.vectored = vectored;
             this.requests = requests;
+        }
+
+        void update(String status) {
+            for (Request<A> request : requests) {
+                request.update(status);
+            }
         }
 
         public Batch<A> add(final long offset, final ByteBuffer buffer,
@@ -347,6 +365,10 @@ public class AIOContext {
         }
     }
 
+    public interface RequestStatus {
+        void update(String status);
+    }
+
     public static final class Request<A> {
         int slot;
         final long offset;
@@ -375,6 +397,14 @@ public class AIOContext {
             this.path = path;
             this.fileDescriptor = fileDescriptor;
             this.lengthRead = -1;
+        }
+
+        void update(String status) {
+            for (BufferHolder<A> buffer : buffers) {
+                if (buffer.attachment != null && buffer.attachment instanceof RequestStatus) {
+                    ((RequestStatus) buffer.attachment).update(status);
+                }
+            }
         }
 
         boolean maybeAdd(long offset, ByteBuffer buffer, CompletionHandler<Integer, ? super A> handler, A attachment) {
