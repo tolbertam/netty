@@ -16,7 +16,6 @@
 package io.netty.channel.epoll;
 
 
-import java.io.IOError;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.CompletionHandler;
@@ -65,7 +64,7 @@ public class AIOContext {
         }
     }
 
-    FileDescriptor getEventFd() {
+    public FileDescriptor getEventFd() {
         return eventFd;
     }
 
@@ -75,10 +74,10 @@ public class AIOContext {
 
     public <A> void read(Batch<A> batch) {
         assert !destroyed;
-        submitBatch(batch);
+        submitBatch(batch, true);
     }
 
-    private int submitBatch(Batch<?> batch) {
+    private int submitBatch(Batch<?> batch, boolean pendingLast) {
         if (logger.isTraceEnabled()) {
             logger.trace("Received read batch {}", batch);
         }
@@ -109,7 +108,7 @@ public class AIOContext {
                 Native.submitAIOReads(this, eventFd.intValue(), batch.fileDescriptor.intValue(), toSubmit.requests);
             }  catch (Throwable e) {
                 if (e instanceof ChannelException && e.getMessage().contains("Resource temporarily unavailable")) {
-                    addToPending(toSubmit);
+                    addToPending(toSubmit, pendingLast);
                 } else {
                     logger.error("Error reading " + batch.path + "@" + batch.offset(), e);
                     batch.failed(e);
@@ -118,24 +117,24 @@ public class AIOContext {
         }
 
         if (currentIndex < batch.requests.size()) {
-            addToPending(batch.split(currentIndex, batch.requests.size()));
+            addToPending(batch.split(currentIndex, batch.requests.size()), pendingLast);
         }
 
         return currentIndex; // the number of requests submitted
     }
 
-    private <A> void addToPending(final Batch<A> batch) {
+    private <A> void addToPending(final Batch<A> batch, boolean last) {
         if (pendingBatches.size() >= maxPending) {
             batch.failed(new RuntimeException("Too many pending requests"));
         }
-        boolean added = pendingBatches.offer(batch);
+        boolean added = last ? pendingBatches.offerLast(batch) : pendingBatches.offerFirst(batch);
         assert added : "failed to add request batch";
     }
 
     /**
      * Process the read events for this AIO context.
      */
-    void processReady() {
+    public void processReady() {
         assert !destroyed : "AIO context already destroyed";
         try {
             innerProcessReady();
@@ -195,8 +194,21 @@ public class AIOContext {
                 break;
             }
 
-            numSubmitted += submitBatch(batch);
+            numSubmitted += submitBatch(batch, false);
         }
+    }
+
+    @Override
+    public String toString() {
+        int requests = 0;
+        for (Request r : outstandingRequests) {
+            if (r != null && r.slot != -1) {
+                requests++;
+            }
+        }
+
+        return String.format("AioContext[eventfd: %s, outstanding: %s, pending: %s]",
+                             eventFd, requests, pendingBatches.size());
     }
 
     /**

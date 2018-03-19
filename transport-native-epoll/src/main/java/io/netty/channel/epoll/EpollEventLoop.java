@@ -40,6 +40,8 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
+import io.netty.util.internal.logging.InternalLogLevel;
+
 import static java.lang.Math.min;
 
 /**
@@ -107,8 +109,9 @@ public class EpollEventLoop extends SingleThreadEventLoop {
         if (aio != null && Aio.isAvailable()) {
             try {
                 aioContext = Native.createAIOContext(aio);
-                Native.epollCtlAdd(epollFd.intValue(), aioContext.getEventFd().intValue(),
-                        Native.EPOLLIN | Native.EPOLLET);
+                Native.epollCtlAdd(epollFd.intValue(),
+                                   aioContext.getEventFd().intValue(),
+                                   Native.EPOLLIN | Native.EFDNONBLOCK | Native.EPOLLET);
                 logger.info("Created AIO Context with params: {}", aio);
             } catch (Throwable e) {
                 logger.error("Unable to initialize AIO", e);
@@ -169,6 +172,10 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     IovArray cleanArray() {
         iovArray.clear();
         return iovArray;
+    }
+
+    public FileDescriptor epollFd() {
+        return epollFd;
     }
 
     /**
@@ -419,6 +426,7 @@ public class EpollEventLoop extends SingleThreadEventLoop {
                 Native.timerFdRead(fd);
             } else if (aioContext != null && fd == aioContext.getEventFd().intValue()) {
                 // consume aio event
+                Native.eventFdRead(fd);
                 aioContext.processReady();
             } else {
                 final long ev = events.events(i);
@@ -500,6 +508,22 @@ public class EpollEventLoop extends SingleThreadEventLoop {
             if (aioContext != null) {
                 aioContext.destroy();
             }
+        }
+    }
+
+    public void toLogAsync(final InternalLogLevel level) {
+        Runnable log = new Runnable() {
+            @Override
+            public void run() {
+                logger.log(level,
+                           String.format("EpollEventLoop[epollfd: %s, eventfd: %s, timerfd: %s, aio: %s]",
+                                         epollFd, eventFd, timerFd, aioContext.toString()));
+            }
+        };
+        if (inEventLoop()) {
+            log.run();
+        } else {
+            submit(log);
         }
     }
 }

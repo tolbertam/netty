@@ -21,7 +21,7 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.13.10.dse</version>
+    <version>4.1.13.11.dse</version>
   </parent>
 
   <artifactId>netty-transport-rxtx</artifactId>

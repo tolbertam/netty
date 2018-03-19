@@ -134,11 +134,15 @@ static void netty_epoll_native_eventFdWrite(JNIEnv* env, jclass clazz, jint fd, 
 static jlong netty_epoll_native_eventFdRead(JNIEnv* env, jclass clazz, jint fd) {
     uint64_t eventfd_t;
 
-    if (eventfd_read(fd, &eventfd_t) != 0) {
-        // something is serious wrong
-        netty_unix_errors_throwRuntimeException(env, "eventfd_read() failed");
+    int err = eventfd_read(fd, &eventfd_t);
+    if (err != 0) {
+        if (errno != EAGAIN && errno != -EAGAIN)
+        {
+            // something is serious wrong
+            netty_unix_errors_throwRuntimeExceptionErrorNo(env, "eventfd_read() failed: ", errno);
+        }
+        return 0;
     }
-	
 	return (long) eventfd_t;
 }
 
@@ -365,6 +369,14 @@ static jint netty_epoll_native_epollerr(JNIEnv* env, jclass clazz) {
     return EPOLLERR;
 }
 
+static jint netty_epoll_native_efdnonblock(JNIEnv* env, jclass clazz) {
+    return EFD_NONBLOCK;
+}
+
+static jint netty_epoll_native_eagain(JNIEnv* env, jclass clazz) {
+    return EAGAIN;
+}
+
 static jint netty_epoll_native_sizeofEpollEvent(JNIEnv* env, jclass clazz) {
     return sizeof(struct epoll_event);
 }
@@ -428,7 +440,7 @@ static jlong netty_epoll_native_createAIOContext0(JNIEnv* env, jclass clazz, jin
 
     if (concurrency <= 0 || concurrency > 1024) {
         netty_unix_errors_throwRuntimeException(env, "invalid concurrency level, it should be > 0 and <= 1024.");
-        return;
+        return JNI_ERR;
     }
 
     netty_io_context_t* ctx = malloc(sizeof(netty_io_context_t));
@@ -637,6 +649,8 @@ static const JNINativeMethod statically_referenced_fixed_method_table[] = {
   { "epollout", "()I", (void *) netty_epoll_native_epollout },
   { "epollrdhup", "()I", (void *) netty_epoll_native_epollrdhup },
   { "epollerr", "()I", (void *) netty_epoll_native_epollerr },
+  { "efdnonblock", "()I", (void *) netty_epoll_native_efdnonblock },
+  { "eagain", "()I", (void *) netty_epoll_native_eagain },
   { "tcpMd5SigMaxKeyLen", "()I", (void *) netty_epoll_native_tcpMd5SigMaxKeyLen },
   { "isSupportingSendmmsg", "()Z", (void *) netty_epoll_native_isSupportingSendmmsg },
   { "isSupportingTcpFastopen", "()Z", (void *) netty_epoll_native_isSupportingTcpFastopen },

@@ -49,6 +49,10 @@ public class AIOEpollFileChannel extends AsynchronousFileChannel {
         this.isDirect = flags == FileDescriptor.O_DIRECT;
     }
 
+    public EpollEventLoop getEpollEventLoop() {
+        return epollEventLoop;
+    }
+
     public int getFd() {
         return file.intValue();
     }
