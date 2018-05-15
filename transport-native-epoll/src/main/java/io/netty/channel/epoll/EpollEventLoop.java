@@ -45,8 +45,6 @@ import static java.lang.Math.min;
 
 import io.netty.util.internal.logging.InternalLogLevel;
 
-import static java.lang.Math.min;
-
 /**
  * {@link EventLoop} which uses epoll under the covers. Only works on Linux!
  */
