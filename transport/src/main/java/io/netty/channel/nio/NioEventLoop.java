@@ -113,6 +113,8 @@ public final class NioEventLoop extends SingleThreadEventLoop {
         }
     }
 
+    static final long MAX_SCHEDULED_DAYS = 365 * 3;
+
     /**
      * The NIO {@link Selector}.
      */
@@ -214,11 +216,11 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                     Field selectedKeysField = selectorImplClass.getDeclaredField("selectedKeys");
                     Field publicSelectedKeysField = selectorImplClass.getDeclaredField("publicSelectedKeys");
 
-                    Throwable cause = ReflectionUtil.trySetAccessible(selectedKeysField);
+                    Throwable cause = ReflectionUtil.trySetAccessible(selectedKeysField, true);
                     if (cause != null) {
                         return cause;
                     }
-                    cause = ReflectionUtil.trySetAccessible(publicSelectedKeysField);
+                    cause = ReflectionUtil.trySetAccessible(publicSelectedKeysField, true);
                     if (cause != null) {
                         return cause;
                     }
@@ -256,7 +258,8 @@ public final class NioEventLoop extends SingleThreadEventLoop {
     @Override
     protected Queue<Runnable> newTaskQueue(int maxPendingTasks) {
         // This event loop never calls takeTask()
-        return PlatformDependent.newMpscQueue(maxPendingTasks);
+        return maxPendingTasks == Integer.MAX_VALUE ? PlatformDependent.<Runnable>newMpscQueue()
+                                                    : PlatformDependent.<Runnable>newMpscQueue(maxPendingTasks);
     }
 
     @Override
@@ -438,8 +441,8 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                         if (wakenUp.get()) {
                             selector.wakeup();
                         }
+                        // fall through
                     default:
-                        // fallthrough
                 }
 
                 cancelledKeys = 0;
@@ -729,6 +732,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
             int selectCnt = 0;
             long currentTimeNanos = System.nanoTime();
             long selectDeadLineNanos = currentTimeNanos + delayNanos(currentTimeNanos);
+
             for (;;) {
                 long timeoutMillis = (selectDeadLineNanos - currentTimeNanos + 500000L) / 1000000L;
                 if (timeoutMillis <= 0) {
@@ -819,6 +823,14 @@ public final class NioEventLoop extends SingleThreadEventLoop {
             selector.selectNow();
         } catch (Throwable t) {
             logger.warn("Failed to update SelectionKeys.", t);
+        }
+    }
+
+    @Override
+    protected void validateScheduled(long amount, TimeUnit unit) {
+        long days = unit.toDays(amount);
+        if (days > MAX_SCHEDULED_DAYS) {
+            throw new IllegalArgumentException("days: " + days + " (expected: < " + MAX_SCHEDULED_DAYS + ')');
         }
     }
 }

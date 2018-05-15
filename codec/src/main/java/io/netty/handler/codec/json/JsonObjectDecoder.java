@@ -91,8 +91,7 @@ public class JsonObjectDecoder extends ByteToMessageDecoder {
         }
 
         if (this.idx > in.readerIndex() && lastReaderIndex != in.readerIndex()) {
-            this.idx = in.readerIndex();
-            reset();
+            this.idx = in.readerIndex() + (idx - lastReaderIndex);
         }
 
         // index of next byte to process.

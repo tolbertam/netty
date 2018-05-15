@@ -16,31 +16,15 @@
 
 package io.netty.handler.ssl;
 
-import static org.hamcrest.CoreMatchers.is;
-import static org.hamcrest.CoreMatchers.nullValue;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
-
-import java.io.File;
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-
-import javax.net.ssl.SSLEngine;
-
-import org.junit.Test;
-
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.DefaultEventLoopGroup;
@@ -63,8 +47,24 @@ import io.netty.util.ReferenceCounted;
 import io.netty.util.concurrent.Promise;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.StringUtil;
+import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+
+import java.io.File;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
+import javax.net.ssl.SSLEngine;
+
+import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.nullValue;
+import static org.junit.Assert.*;
+import static org.junit.Assume.assumeTrue;
 
 @RunWith(Parameterized.class)
 public class SniHandlerTest {
@@ -141,6 +141,42 @@ public class SniHandlerTest {
     }
 
     @Test
+    public void testNonSslRecord() throws Exception {
+        SslContext nettyContext = makeSslContext(provider, false);
+        try {
+            final AtomicReference<SslHandshakeCompletionEvent> evtRef =
+                    new AtomicReference<SslHandshakeCompletionEvent>();
+            SniHandler handler = new SniHandler(new DomainNameMappingBuilder<SslContext>(nettyContext).build());
+            EmbeddedChannel ch = new EmbeddedChannel(handler, new ChannelInboundHandlerAdapter() {
+                @Override
+                public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                    if (evt instanceof SslHandshakeCompletionEvent) {
+                        assertTrue(evtRef.compareAndSet(null, (SslHandshakeCompletionEvent) evt));
+                    }
+                }
+            });
+
+            try {
+                byte[] bytes = new byte[1024];
+                bytes[0] = SslUtils.SSL_CONTENT_TYPE_ALERT;
+
+                try {
+                    ch.writeInbound(Unpooled.wrappedBuffer(bytes));
+                    fail();
+                } catch (DecoderException e) {
+                    assertTrue(e.getCause() instanceof NotSslRecordException);
+                }
+                assertFalse(ch.finish());
+            } finally {
+                ch.finishAndReleaseAll();
+            }
+            assertTrue(evtRef.get().cause() instanceof NotSslRecordException);
+        } finally {
+            releaseAll(nettyContext);
+        }
+    }
+
+    @Test
     public void testServerNameParsing() throws Exception {
         SslContext nettyContext = makeSslContext(provider, false);
         SslContext leanContext = makeSslContext(provider, false);
@@ -156,8 +192,18 @@ public class SniHandlerTest {
                     .add("chat4.leancloud.cn", leanContext2)
                     .build();
 
+            final AtomicReference<SniCompletionEvent> evtRef = new AtomicReference<SniCompletionEvent>();
             SniHandler handler = new SniHandler(mapping);
-            EmbeddedChannel ch = new EmbeddedChannel(handler);
+            EmbeddedChannel ch = new EmbeddedChannel(handler, new ChannelInboundHandlerAdapter() {
+                @Override
+                public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                    if (evt instanceof SniCompletionEvent) {
+                        assertTrue(evtRef.compareAndSet(null, (SniCompletionEvent) evt));
+                    } else {
+                        ctx.fireUserEventTriggered(evt);
+                    }
+                }
+            });
 
             try {
                 // hex dump of a client hello packet, which contains hostname "CHAT4.LEANCLOUD.CN"
@@ -179,6 +225,12 @@ public class SniHandlerTest {
 
                 assertThat(handler.hostname(), is("chat4.leancloud.cn"));
                 assertThat(handler.sslContext(), is(leanContext));
+
+                SniCompletionEvent evt = evtRef.get();
+                assertNotNull(evt);
+                assertEquals("chat4.leancloud.cn", evt.hostname());
+                assertTrue(evt.isSuccess());
+                assertNull(evt.cause());
             } finally {
                 ch.finishAndReleaseAll();
             }
@@ -251,12 +303,25 @@ public class SniHandlerTest {
 
             // invalid
             byte[] message = {22, 3, 1, 0, 0};
-
             try {
                 // Push the handshake message.
                 ch.writeInbound(Unpooled.wrappedBuffer(message));
+                // TODO(scott): This should fail becasue the engine should reject zero length records during handshake.
+                // See https://github.com/netty/netty/issues/6348.
+                // fail();
             } catch (Exception e) {
                 // expected
+            }
+
+            ch.close();
+
+            // When the channel is closed the SslHandler will write an empty buffer to the channel.
+            ByteBuf buf = ch.readOutbound();
+            // TODO(scott): if the engine is shutdown correctly then this buffer shouldn't be null!
+            // See https://github.com/netty/netty/issues/6348.
+            if (buf != null) {
+                assertFalse(buf.isReadable());
+                buf.release();
             }
 
             assertThat(ch.finish(), is(false));

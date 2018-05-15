@@ -38,7 +38,10 @@ import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
+import static java.lang.Math.min;
 
 import io.netty.util.internal.logging.InternalLogLevel;
 
@@ -81,6 +84,9 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     };
     protected volatile int wakenUp;
     private volatile int ioRatio = 50;
+
+    // See http://man7.org/linux/man-pages/man2/timerfd_create.2.html.
+    static final long MAX_SCHEDULED_DAYS = TimeUnit.SECONDS.toDays(999999999);
 
     protected EpollEventLoop(EventLoopGroup parent, Executor executor, int maxEvents,
                              SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
@@ -144,6 +150,13 @@ public class EpollEventLoop extends SingleThreadEventLoop {
                 if (eventFd != null) {
                     try {
                         eventFd.close();
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
+                if (timerFd != null) {
+                    try {
+                        timerFd.close();
                     } catch (Exception e) {
                         // ignore
                     }
@@ -243,7 +256,8 @@ public class EpollEventLoop extends SingleThreadEventLoop {
     @Override
     protected Queue<Runnable> newTaskQueue(int maxPendingTasks) {
         // This event loop never calls takeTask()
-        return PlatformDependent.newMpscQueue(maxPendingTasks);
+        return maxPendingTasks == Integer.MAX_VALUE ? PlatformDependent.<Runnable>newMpscQueue()
+                                                    : PlatformDependent.<Runnable>newMpscQueue(maxPendingTasks);
     }
 
     @Override
@@ -524,6 +538,14 @@ public class EpollEventLoop extends SingleThreadEventLoop {
             log.run();
         } else {
             submit(log);
+        }
+    }
+
+    @Override
+    protected void validateScheduled(long amount, TimeUnit unit) {
+        long days = unit.toDays(amount);
+        if (days > MAX_SCHEDULED_DAYS) {
+            throw new IllegalArgumentException("days: " + days + " (expected: < " + MAX_SCHEDULED_DAYS + ')');
         }
     }
 }

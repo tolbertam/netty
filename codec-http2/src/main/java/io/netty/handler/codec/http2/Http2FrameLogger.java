@@ -20,6 +20,7 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandlerAdapter;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.logging.LogLevel;
+import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogLevel;
 import io.netty.util.internal.logging.InternalLogger;
@@ -61,19 +62,19 @@ public class Http2FrameLogger extends ChannelHandlerAdapter {
 
     public void logData(Direction direction, ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding,
             boolean endStream) {
-        logger.log(level, "{} {} PRIORITY: streamId={} padding={} endStream={} length={} bytes={}", ctx.channel(),
+        logger.log(level, "{} {} DATA: streamId={} padding={} endStream={} length={} bytes={}", ctx.channel(),
                 direction.name(), streamId, padding, endStream, data.readableBytes(), toString(data));
     }
 
     public void logHeaders(Direction direction, ChannelHandlerContext ctx, int streamId, Http2Headers headers,
             int padding, boolean endStream) {
-        logger.log(level, "{} {} PRIORITY: streamId={} headers={} padding={} endStream={}", ctx.channel(),
+        logger.log(level, "{} {} HEADERS: streamId={} headers={} padding={} endStream={}", ctx.channel(),
                 direction.name(), streamId, headers, padding, endStream);
     }
 
     public void logHeaders(Direction direction, ChannelHandlerContext ctx, int streamId, Http2Headers headers,
             int streamDependency, short weight, boolean exclusive, int padding, boolean endStream) {
-        logger.log(level, "{} {} PRIORITY: streamId={} headers={} streamDependency={} weight={} exclusive={} " +
+        logger.log(level, "{} {} HEADERS: streamId={} headers={} streamDependency={} weight={} exclusive={} " +
                         "padding={} endStream={}", ctx.channel(),
                 direction.name(), streamId, headers, streamDependency, weight, exclusive, padding, endStream);
     }
@@ -97,14 +98,14 @@ public class Http2FrameLogger extends ChannelHandlerAdapter {
         logger.log(level, "{} {} SETTINGS: ack=false settings={}", ctx.channel(), direction.name(), settings);
     }
 
-    public void logPing(Direction direction, ChannelHandlerContext ctx, ByteBuf data) {
-        logger.log(level, "{} {} PING: ack=false length={} bytes={}", ctx.channel(),
-                direction.name(), data.readableBytes(), toString(data));
+    public void logPing(Direction direction, ChannelHandlerContext ctx, long data) {
+        logger.log(level, "{} {} PING: ack=false bytes={}", ctx.channel(),
+                direction.name(), data);
     }
 
-    public void logPingAck(Direction direction, ChannelHandlerContext ctx, ByteBuf data) {
-        logger.log(level, "{} {} PING: ack=true length={} bytes={}", ctx.channel(),
-                direction.name(), data.readableBytes(), toString(data));
+    public void logPingAck(Direction direction, ChannelHandlerContext ctx, long data) {
+        logger.log(level, "{} {} PING: ack=true bytes={}", ctx.channel(),
+                direction.name(), data);
     }
 
     public void logPushPromise(Direction direction, ChannelHandlerContext ctx, int streamId, int promisedStreamId,
@@ -132,6 +133,10 @@ public class Http2FrameLogger extends ChannelHandlerAdapter {
     }
 
     private String toString(ByteBuf buf) {
+        if (!logger.isEnabled(level)) {
+            return StringUtil.EMPTY_STRING;
+        }
+
         if (level == InternalLogLevel.TRACE || buf.readableBytes() <= BUFFER_LENGTH_THRESHOLD) {
             // Log the entire buffer.
             return ByteBufUtil.hexDump(buf);

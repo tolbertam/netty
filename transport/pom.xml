@@ -20,13 +20,17 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.13.11.dse</version>
+    <version>4.1.25.dse</version>
   </parent>
 
   <artifactId>netty-transport</artifactId>
   <packaging>jar</packaging>
 
   <name>Netty/Transport</name>
+
+  <properties>
+    <javaModuleName>io.netty.transport</javaModuleName>
+  </properties>
 
   <dependencies>
     <dependency>

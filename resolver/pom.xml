@@ -20,13 +20,17 @@
   <parent>
     <groupId>io.netty</groupId>
     <artifactId>netty-parent</artifactId>
-    <version>4.1.13.11.dse</version>
+    <version>4.1.25.dse</version>
   </parent>
 
   <artifactId>netty-resolver</artifactId>
   <packaging>jar</packaging>
 
   <name>Netty/Resolver</name>
+
+  <properties>
+    <javaModuleName>io.netty.resolver</javaModuleName>
+  </properties>
 
   <dependencies>
     <dependency>
