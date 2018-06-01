@@ -121,4 +121,9 @@ class EpollRecvByteAllocatorHandle implements RecvByteBufAllocator.ExtendedHandl
         // We must override the supplier which determines if there maybe more data to read.
         return delegate.continueReading(defaultMaybeMoreDataSupplier);
     }
+
+    @Override
+    public void channelClosed() {
+        delegate.channelClosed();
+    }
 }

@@ -99,6 +99,11 @@ final class KQueueRecvByteAllocatorHandle implements RecvByteBufAllocator.Extend
         return delegate.continueReading(defaultMaybeMoreDataSupplier);
     }
 
+    @Override
+    public void channelClosed() {
+        delegate.channelClosed();
+    }
+
     void readEOF() {
         readEOF = true;
     }
