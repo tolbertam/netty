@@ -889,6 +889,9 @@ public class Http2MultiplexCodec extends Http2FrameCodec {
                 if (isRegistered()) {
                     deregister(unsafe().voidPromise());
                 }
+                if (recvHandle != null) {
+                    recvHandle.channelClosed();
+                }
             }
 
             @Override

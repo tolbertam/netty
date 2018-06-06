@@ -37,6 +37,9 @@ import java.nio.channels.NotYetConnectedException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.GenericFutureListener;
+
 /**
  * A skeletal {@link Channel} implementation.
  */
@@ -83,6 +86,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
         id = newId();
         unsafe = newUnsafe();
         pipeline = newChannelPipeline();
+        notifyRecvBufHandleOnChannelClose();
     }
 
     /**
@@ -96,6 +100,19 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
         this.id = id;
         unsafe = newUnsafe();
         pipeline = newChannelPipeline();
+        notifyRecvBufHandleOnChannelClose();
+    }
+
+    private void notifyRecvBufHandleOnChannelClose() {
+        closeFuture.addListener(new GenericFutureListener<Future<Void>>() {
+            @Override
+            public void operationComplete(Future<Void> future) {
+                RecvByteBufAllocator.Handle handle = unsafe.recvBufAllocHandle();
+                if (handle != null) {
+                    handle.channelClosed();
+                }
+            }
+        });
     }
 
     @Override
