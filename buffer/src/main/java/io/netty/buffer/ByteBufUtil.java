@@ -445,7 +445,10 @@ public final class ByteBufUtil {
      */
     public static int writeUtf8(ByteBuf buf, CharSequence seq) {
         for (;;) {
-            if (buf instanceof AbstractByteBuf) {
+            if (buf instanceof WrappedCompositeByteBuf) {
+                // WrappedCompositeByteBuf is a sub-class of AbstractByteBuf so it needs special handling.
+                buf = buf.unwrap();
+            } else if (buf instanceof AbstractByteBuf) {
                 AbstractByteBuf byteBuf = (AbstractByteBuf) buf;
                 byteBuf.ensureWritable(utf8MaxBytes(seq));
                 int written = writeUtf8(byteBuf, byteBuf.writerIndex, seq, seq.length());
@@ -546,7 +549,10 @@ public final class ByteBufUtil {
             buf.writeBytes(asciiString.array(), asciiString.arrayOffset(), len);
         } else {
             for (;;) {
-                if (buf instanceof AbstractByteBuf) {
+                if (buf instanceof WrappedCompositeByteBuf) {
+                    // WrappedCompositeByteBuf is a sub-class of AbstractByteBuf so it needs special handling.
+                    buf = buf.unwrap();
+                } else if (buf instanceof AbstractByteBuf) {
                     AbstractByteBuf byteBuf = (AbstractByteBuf) buf;
                     byteBuf.ensureWritable(len);
                     int written = writeAscii(byteBuf, byteBuf.writerIndex, seq, len);
