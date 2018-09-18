@@ -11,5 +11,6 @@ build:
       export MAVEN_HOME=/home/jenkins/.mvn/apache-maven-3.2.5
       export PATH=$MAVEN_HOME/bin:$PATH
       sudo apt-get update
-      sudo apt-get install -y build-essential
+      sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
+
       mvn -B install -DskipTests
