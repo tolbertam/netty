@@ -9,7 +9,7 @@ java:
 build:
   - script: |
       if [ "$OS_VERSION" = "osx/high-sierra" ]; then
-         mvn -B -pl transport-native-kqueue,transport-native-unix-common package -DskipTests
+         mvn -B -pl transport-native-kqueue,transport-native-unix-common clean package -DskipTests
          mvn -B -pl transport-native-kqueue -Partifactory deploy -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
       else
          export DEBIAN_FRONTEND=noninteractive
@@ -17,5 +17,5 @@ build:
          export PATH=$MAVEN_HOME/bin:$PATH
          sudo apt-get update
          sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
-         mvn -B package deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+         mvn -B clean package deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
       fi
