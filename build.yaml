@@ -12,5 +12,4 @@ build:
       export PATH=$MAVEN_HOME/bin:$PATH
       sudo apt-get update
       sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
-      cat ~/.m2/settings.xml
-      mvn -B deploy -Partifactory -DskipTests
+      mvn -B deploy -Partifactory -DskipTests -DaltDeploymentRepository=artifactory
