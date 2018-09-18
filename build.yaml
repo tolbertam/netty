@@ -1,8 +1,6 @@
 schedules:
   adhoc:
     schedule: adhoc
-architecture:
-  - x64
 os:
   - ubuntu/xenial64
 java:
