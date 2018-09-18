@@ -17,5 +17,5 @@ build:
          export PATH=$MAVEN_HOME/bin:$PATH
          sudo apt-get update
          sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
-         mvn -B clean package deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+         mvn -B clean deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
       fi
