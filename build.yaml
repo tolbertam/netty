@@ -1,0 +1,16 @@
+schedules:
+  adhoc:
+    schedule: adhoc
+    branches:
+      include: [netty]
+architecture:
+  - x64
+os:
+  - ubuntu/xenial64
+build:
+  - script: |
+      . /usr/local/bin/jdk_switcher.sh
+      jdk_switcher use openjdk8
+      export MAVEN_HOME=/home/jenkins/.mvn/apache-maven-3.2.5
+      export PATH=$MAVEN_HOME/bin:$PATH
+      mvn -B install -DskipTests
