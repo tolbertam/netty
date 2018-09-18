@@ -1,8 +1,6 @@
 schedules:
   adhoc:
     schedule: adhoc
-    branches:
-      include: [netty]
 architecture:
   - x64
 os:
