@@ -971,9 +971,8 @@
       <!-- After artifacts were deployed from linux and macos we need to execute the following on macOS (in the root of the project).
            mvn -Psonatype-oss-release,full,uber-staging -pl transport-native-kqueue,transport-native-unix-common,all,tarball clean package gpg:sign org.sonatype.plugins:nexus-staging-maven-plugin:deploy -DstagingRepositoryId=${netty-id} -DnexusUrl=https://oss.sonatype.org -DserverId=sonatype-nexus-staging
       -->
-      <plugin>
+      <!--<plugin>
         <artifactId>maven-release-plugin</artifactId>
-        <!-- Downgrade to 2.4.1 if release fails -->
         <version>2.5.3</version>
         <configuration>
           <useReleaseProfile>false</useReleaseProfile>
@@ -994,7 +993,7 @@
             <version>1.9.4</version>
           </dependency>
         </dependencies>
-      </plugin>
+      </plugin>-->
 
       <!-- Ensure to put maven-antrun-plugin at the end of the plugin list
            so that they are run lastly in the same phase. -->
