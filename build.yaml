@@ -3,7 +3,7 @@ schedules:
     schedule: adhoc
 os:
   - osx/high-sierra
-  - ubuntu/trusty64
+    #- ubuntu/trusty64
 java:
   - oraclejdk8
 build:
@@ -16,5 +16,5 @@ build:
          export PATH=$MAVEN_HOME/bin:$PATH
          sudo apt-get update
          sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
-         mvn -B deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
-     fi
+         mvn -B package deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+      fi
