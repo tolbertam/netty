@@ -2,14 +2,19 @@ schedules:
   adhoc:
     schedule: adhoc
 os:
+  - osx/high-sierra
   - ubuntu/trusty64
 java:
   - oraclejdk8
 build:
   - script: |
-      export DEBIAN_FRONTEND=noninteractive
-      export MAVEN_HOME=/home/jenkins/.mvn/apache-maven-3.2.5
-      export PATH=$MAVEN_HOME/bin:$PATH
-      sudo apt-get update
-      sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
-      mvn -B deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+      if [ "$OS_VERSION" = "osx/high-sierra" ]; then
+         brew help
+      else
+         export DEBIAN_FRONTEND=noninteractive
+         export MAVEN_HOME=/home/jenkins/.mvn/apache-maven-3.2.5
+         export PATH=$MAVEN_HOME/bin:$PATH
+         sudo apt-get update
+         sudo apt-get install -y autoconf automake libtool make tar gcc-multilib libaio-dev
+         mvn -B deploy -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
+     fi
