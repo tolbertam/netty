@@ -9,7 +9,8 @@ java:
 build:
   - script: |
       if [ "$OS_VERSION" = "osx/high-sierra" ]; then
-         brew help
+         mvn -B -pl transport-native-kqueue,transport-native-unix-common package -DskipTests
+         mvn -B deploy -pl transport-native-kqueue -Partifactory -DskipTests -DaltDeploymentRepository="artifactory::default::https://repo.datastax.com/datastax-releases-local"
       else
          export DEBIAN_FRONTEND=noninteractive
          export MAVEN_HOME=/home/jenkins/.mvn/apache-maven-3.2.5
