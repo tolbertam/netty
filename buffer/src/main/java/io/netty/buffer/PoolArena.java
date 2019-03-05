@@ -737,10 +737,10 @@ abstract class PoolArena<T> implements PoolArenaMetric {
                 int pageShifts, int chunkSize) {
             if (directMemoryCacheAlignment == 0) {
                 return new PoolChunk<ByteBuffer>(this,
-                        allocateDirect(chunkSize), pageSize, maxOrder,
+                        PlatformDependent.allocateDirect(chunkSize), pageSize, maxOrder,
                         pageShifts, chunkSize, 0);
             }
-            final ByteBuffer memory = allocateDirect(chunkSize
+            final ByteBuffer memory = PlatformDependent.allocateDirect(chunkSize
                     + directMemoryCacheAlignment);
             return new PoolChunk<ByteBuffer>(this, memory, pageSize,
                     maxOrder, pageShifts, chunkSize,
@@ -751,26 +751,17 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         protected PoolChunk<ByteBuffer> newUnpooledChunk(int capacity) {
             if (directMemoryCacheAlignment == 0) {
                 return new PoolChunk<ByteBuffer>(this,
-                        allocateDirect(capacity), capacity, 0);
+                          PlatformDependent.allocateDirect(capacity), capacity, 0);
             }
-            final ByteBuffer memory = allocateDirect(capacity
+            final ByteBuffer memory = PlatformDependent.allocateDirect(capacity
                     + directMemoryCacheAlignment);
             return new PoolChunk<ByteBuffer>(this, memory, capacity,
                     offsetCacheLine(memory));
         }
 
-        private static ByteBuffer allocateDirect(int capacity) {
-            return PlatformDependent.useDirectBufferNoCleaner() ?
-                    PlatformDependent.allocateDirectNoCleaner(capacity) : ByteBuffer.allocateDirect(capacity);
-        }
-
         @Override
         protected void destroyChunk(PoolChunk<ByteBuffer> chunk) {
-            if (PlatformDependent.useDirectBufferNoCleaner()) {
-                PlatformDependent.freeDirectNoCleaner(chunk.memory);
-            } else {
-                PlatformDependent.freeDirectBuffer(chunk.memory);
-            }
+            PlatformDependent.freeDirectBuffer(chunk.memory);
         }
 
         @Override
