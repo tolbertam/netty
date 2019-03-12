@@ -147,21 +147,16 @@ public final class PlatformDependent {
 
         if (maxDirectMemory == 0 || !hasUnsafe() || !PlatformDependent0.hasDirectBufferNoCleanerConstructor()) {
             USE_DIRECT_BUFFER_NO_CLEANER = false;
-            DIRECT_MEMORY_COUNTER = null;
         } else {
             USE_DIRECT_BUFFER_NO_CLEANER = true;
             if (maxDirectMemory < 0) {
                 maxDirectMemory = maxDirectMemory0();
-                if (maxDirectMemory <= 0) {
-                    DIRECT_MEMORY_COUNTER = null;
-                } else {
-                    DIRECT_MEMORY_COUNTER = new AtomicLong();
-                }
-            } else {
-                DIRECT_MEMORY_COUNTER = new AtomicLong();
             }
         }
+
+        DIRECT_MEMORY_COUNTER = new AtomicLong();
         DIRECT_MEMORY_LIMIT = maxDirectMemory;
+
         logger.debug("-Dio.netty.maxDirectMemory: {} bytes", maxDirectMemory);
 
         int tryAllocateUninitializedArray =
@@ -353,14 +348,6 @@ public final class PlatformDependent {
      */
     public static <K, V> ConcurrentMap<K, V> newConcurrentHashMap(Map<? extends K, ? extends V> map) {
         return new ConcurrentHashMap<K, V>(map);
-    }
-
-    /**
-     * Try to deallocate the specified direct {@link ByteBuffer}. Please note this method does nothing if
-     * the current platform does not support this operation or the specified buffer is not a direct buffer.
-     */
-    public static void freeDirectBuffer(ByteBuffer buffer) {
-        CLEANER.freeDirectBuffer(buffer);
     }
 
     public static long directBufferAddress(ByteBuffer buffer) {
@@ -559,6 +546,45 @@ public final class PlatformDependent {
         PlatformDependent0.setMemory(address, bytes, value);
     }
 
+    public static ByteBuffer allocateDirect(int capacity) {
+        return USE_DIRECT_BUFFER_NO_CLEANER
+                ? PlatformDependent.allocateDirectNoCleaner(capacity)
+                : allocateDirectWithCleaner(capacity);
+    }
+
+    public static void freeDirect(ByteBuffer buffer) {
+        if (USE_DIRECT_BUFFER_NO_CLEANER) {
+            PlatformDependent.freeDirectNoCleaner(buffer);
+        } else {
+            PlatformDependent.freeDirectWithCleaner(buffer);
+        }
+    }
+
+    /**
+     * Allocate a new {@link ByteBuffer} with the given {@code capacity}. {@link ByteBuffer}s allocated with
+     * this method <strong>MUST</strong> be deallocated via {@link #freeDirectWithCleaner(ByteBuffer)}.
+     */
+    public static ByteBuffer allocateDirectWithCleaner(int capacity) {
+        incrementMemoryCounter(capacity);
+        try {
+            return ByteBuffer.allocateDirect(capacity);
+        } catch (Throwable e) {
+            decrementMemoryCounter(capacity);
+            throwException(e);
+            return null;
+        }
+    }
+
+    /**
+     * Try to deallocate the specified direct {@link ByteBuffer}. Please note this method does nothing if
+     * the current platform does not support this operation or the specified buffer is not a direct buffer.
+     */
+    public static void freeDirectWithCleaner(ByteBuffer buffer) {
+        int capacity = buffer.capacity();
+        CLEANER.freeDirectBuffer(buffer);
+        decrementMemoryCounter(capacity);
+    }
+
     /**
      * Allocate a new {@link ByteBuffer} with the given {@code capacity}. {@link ByteBuffer}s allocated with
      * this method <strong>MUST</strong> be deallocated via {@link #freeDirectNoCleaner(ByteBuffer)}.
@@ -607,30 +633,30 @@ public final class PlatformDependent {
     }
 
     private static void incrementMemoryCounter(int capacity) {
-        if (DIRECT_MEMORY_COUNTER != null) {
-            for (;;) {
-                long usedMemory = DIRECT_MEMORY_COUNTER.get();
-                long newUsedMemory = usedMemory + capacity;
-                if (newUsedMemory > DIRECT_MEMORY_LIMIT) {
-                    throw new OutOfDirectMemoryError("failed to allocate " + capacity
-                            + " byte(s) of direct memory (used: " + usedMemory + ", max: " + DIRECT_MEMORY_LIMIT + ')');
-                }
-                if (DIRECT_MEMORY_COUNTER.compareAndSet(usedMemory, newUsedMemory)) {
-                    break;
-                }
+        for (;;) {
+            long usedMemory = DIRECT_MEMORY_COUNTER.get();
+            long newUsedMemory = usedMemory + capacity;
+            if (DIRECT_MEMORY_LIMIT > 0 && newUsedMemory > DIRECT_MEMORY_LIMIT) {
+                throw new OutOfDirectMemoryError("failed to allocate " + capacity
+                        + " byte(s) of direct memory (used: " + usedMemory + ", max: " + DIRECT_MEMORY_LIMIT + ')');
+            }
+            if (DIRECT_MEMORY_COUNTER.compareAndSet(usedMemory, newUsedMemory)) {
+                break;
             }
         }
     }
 
     private static void decrementMemoryCounter(int capacity) {
-        if (DIRECT_MEMORY_COUNTER != null) {
-            long usedMemory = DIRECT_MEMORY_COUNTER.addAndGet(-capacity);
-            assert usedMemory >= 0;
-        }
+        long usedMemory = DIRECT_MEMORY_COUNTER.addAndGet(-capacity);
+        assert usedMemory >= 0 : "Used memory is negative: " + usedMemory;
     }
 
     public static boolean useDirectBufferNoCleaner() {
         return USE_DIRECT_BUFFER_NO_CLEANER;
+    }
+
+    public static long usedDirectMemory() {
+        return DIRECT_MEMORY_COUNTER.get();
     }
 
     /**
