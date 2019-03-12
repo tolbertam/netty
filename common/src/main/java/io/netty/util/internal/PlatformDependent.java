@@ -574,22 +574,22 @@ public final class PlatformDependent {
     public static ByteBuffer allocateDirect(int capacity) {
         return USE_DIRECT_BUFFER_NO_CLEANER
                 ? PlatformDependent.allocateDirectNoCleaner(capacity)
-                : allocateDirectJVM(capacity);
+                : allocateDirectWithCleaner(capacity);
     }
 
-    public static void freeDirectBuffer(ByteBuffer buffer) {
+    public static void freeDirect(ByteBuffer buffer) {
         if (USE_DIRECT_BUFFER_NO_CLEANER) {
             PlatformDependent.freeDirectNoCleaner(buffer);
         } else {
-            PlatformDependent.freeDirectBufferJVM(buffer);
+            PlatformDependent.freeDirectWithCleaner(buffer);
         }
     }
 
     /**
      * Allocate a new {@link ByteBuffer} with the given {@code capacity}. {@link ByteBuffer}s allocated with
-     * this method <strong>MUST</strong> be deallocated via {@link #freeDirectNoCleaner(ByteBuffer)}.
+     * this method <strong>MUST</strong> be deallocated via {@link #freeDirectWithCleaner(ByteBuffer)}.
      */
-    public static ByteBuffer allocateDirectJVM(int capacity) {
+    public static ByteBuffer allocateDirectWithCleaner(int capacity) {
         incrementMemoryCounter(capacity);
         try {
             return ByteBuffer.allocateDirect(capacity);
@@ -604,7 +604,7 @@ public final class PlatformDependent {
      * Try to deallocate the specified direct {@link ByteBuffer}. Please note this method does nothing if
      * the current platform does not support this operation or the specified buffer is not a direct buffer.
      */
-    public static void freeDirectBufferJVM(ByteBuffer buffer) {
+    public static void freeDirectWithCleaner(ByteBuffer buffer) {
         int capacity = buffer.capacity();
         CLEANER.freeDirectBuffer(buffer);
         decrementMemoryCounter(capacity);
