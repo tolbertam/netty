@@ -761,7 +761,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
 
         @Override
         protected void destroyChunk(PoolChunk<ByteBuffer> chunk) {
-            PlatformDependent.freeDirectBuffer(chunk.memory);
+            PlatformDependent.freeDirect(chunk.memory);
         }
 
         @Override
